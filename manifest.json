@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "chyld.file-vault",
+  "name": "File Vault",
+  "version": "0.1.0",
+  "author": "Chyld Medford",
+  "license": "MIT",
+  "description": "Back up picked files and folders to a GitHub repository from the bar. Each vault is a dated folder that keeps every file under its full path; Sync copies them again and pushes.",
+  "homepage": "https://github.com/chyld/omarchy-rsync-github-plugin",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "File Vault",
+    "description": "Back up picked files and folders to GitHub",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
