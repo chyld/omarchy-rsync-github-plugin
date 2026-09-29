@@ -21,6 +21,30 @@ const Safe = load("Safe.js")
 const Commands = load("Commands.js", { Safe })
 const plainJson = (v) => JSON.parse(JSON.stringify(v))
 
+// The cases fv/common.py must agree on too (tests/test_engine.py runs them).
+const vectors = JSON.parse(readFileSync(root + "tests/vectors.json", "utf8"))
+const expand = (v) => v && typeof v === "object" && "repeat" in v ? v.prefix + v.repeat.repeat(v.times) : v
+
+function check(key, fn) {
+  for (const [raw, expected] of vectors[key]) {
+    const value = expand(raw)
+    assert.deepEqual(plainJson(fn(value)), expected === "=" ? value : expected, `${key}(${JSON.stringify(value).slice(0, 80)})`)
+  }
+}
+
+test("shared vectors: limits", () => {
+  for (const [name, value] of Object.entries(vectors.limits)) assert.equal(Safe[name], value, name)
+  assert.ok(Safe.connectBudget() >= (Safe.MAX_VAULTS + 1) * Safe.LINE_MAX)
+})
+test("shared vectors: repoUrl", () => check("repoUrl", Safe.repoUrl))
+test("shared vectors: vaultName", () => check("vaultName", Safe.vaultName))
+test("shared vectors: sourcePath", () => check("sourcePath", Safe.sourcePath))
+test("shared vectors: machineId", () => check("machineId", Safe.machineId))
+test("shared vectors: plain", () => {
+  for (const [[value, cap], expected] of vectors.plain) assert.equal(Safe.plain(value, cap), expected)
+})
+test("shared vectors: config", () => check("config", Safe.config))
+
 test("repoUrl and repoPage accept https github.com repos only", () => {
   assert.equal(Safe.repoUrl("https://github.com/chyld/backups/"), "https://github.com/chyld/backups.git")
   assert.equal(Safe.repoPage("https://github.com/chyld/backups.git"), "https://github.com/chyld/backups")
@@ -64,7 +88,7 @@ test("config drops invalid parts, duplicates and junk", () => {
       { name: "2026-10-01-omarchy" }, { name: "bad" }, null, 7,
     ] }))
   assert.deepEqual(plainJson(cfg), { version: 1, repoUrl: "https://github.com/chyld/backups", vaults: [
-    { name: "2026-10-01-omarchy", repoUrl: "", sources: ["/etc/hosts"], lastSync: 5, lastSummary: "ab",
+    { name: "2026-10-01-omarchy", repoUrl: "", sources: ["/etc/hosts"], includeSecrets: false, lastSummary: "ab",
       machine: "", machineName: "" }] })
   assert.deepEqual(plainJson(Safe.config("not json")), { version: 1, repoUrl: "", vaults: [] })
 })
@@ -91,8 +115,11 @@ test("engineEvent checks each field", () => {
                                                                commit: "; rm" }))),
                    { event: "pushed", vaults: ["2026-10-01-a"], commit: "" })
   assert.deepEqual(plainJson(Safe.engineEvent(JSON.stringify({ event: "status", cloned: true,
-    pending: { "2026-10-01-a": 3, "bad": 2, "2026-10-01-b": -1 }, unpushed: ["2026-10-01-b"] }))),
-    { event: "status", cloned: true, pending: { "2026-10-01-a": 3 }, unpushed: ["2026-10-01-b"] })
+    pending: { "2026-10-01-a": 3, "bad": 2, "2026-10-01-b": -1 }, unpushed: ["2026-10-01-b"],
+    pushedAt: { "2026-10-01-a": 1790000000, "2026-10-01-b": "soon", "x": 5, "2026-10-01-c": 1e12 } }))),
+    { event: "status", cloned: true, pending: { "2026-10-01-a": 3 }, unpushed: ["2026-10-01-b"],
+      pushedAt: { "2026-10-01-a": 1790000000 } })
+  assert.deepEqual(plainJson(Safe.engineEvent('{"event":"status","pushedAt":[1]}')).pushedAt, {})
   assert.equal(Safe.engineEvent("nope"), null)
   assert.equal(Safe.engineEvent('{"event":"other"}'), null)
 })
@@ -122,9 +149,10 @@ test("reset", () => {
 })
 
 test("summary", () => {
-  assert.equal(Safe.summary({ files: 1, bytes: 10, changed: 0, skippedCount: 0 }), "1 file \u00b7 10 B \u00b7 nothing new")
+  // What waits to be pushed is live status, not part of the stored summary.
+  assert.equal(Safe.summary({ files: 1, bytes: 10, changed: 0, skippedCount: 0 }), "1 file \u00b7 10 B")
   assert.equal(Safe.summary({ files: 12, bytes: 49152, changed: 3, skippedCount: 2 }),
-               "12 files \u00b7 48 KB \u00b7 3 to push \u00b7 2 skipped")
+               "12 files \u00b7 48 KB \u00b7 2 skipped")
 })
 
 test("copy, push, status and diff argv are built only from valid values", () => {
@@ -133,6 +161,13 @@ test("copy, push, status and diff argv are built only from valid values", () => 
     "https://github.com/chyld/backups.git", "2026-10-01-omarchy", "--", "/etc/hosts"])
   assert.deepEqual(plainJson(Commands.copy("/p/engine.py", "https://github.com/a/b", "2026-10-01-a", ["/x"], true)),
     ["/usr/bin/python3", "-I", "-S", "/p/engine.py", "copy", "--adopt", "https://github.com/a/b.git", "2026-10-01-a", "--", "/x"])
+  assert.deepEqual(plainJson(Commands.copy("/p/engine.py", "https://github.com/a/b", "2026-10-01-a", ["/x"], true, true)),
+    ["/usr/bin/python3", "-I", "-S", "/p/engine.py", "copy", "--adopt", "--secrets", "https://github.com/a/b.git",
+     "2026-10-01-a", "--", "/x"])
+  assert.deepEqual(plainJson(Commands.listFiles("", "/p/engine.py", "2026-10-01-a", ["/x"], true)),
+    ["/usr/share/omarchy/bin/omarchy-launch-tui", "--app-id=org.omarchy.file-vault",
+     "/usr/bin/python3", "-I", "-S", "/p/engine.py", "list", "--secrets", "2026-10-01-a", "--", "/x"])
+  assert.equal(Commands.listFiles("", "/p/engine.py", "2026-10-01-a", ["/x"], "yes").includes("--secrets"), false)
   assert.equal(Commands.copy("/p/engine.py", "nope", "2026-10-01-omarchy", []), null)
   assert.equal(Commands.copy("/p/engine.py", "https://github.com/a/b", "x", []), null)
   assert.equal(Commands.copy("/p/engine.py", "https://github.com/a/b", "2026-10-01-a", ["--help"]), null)

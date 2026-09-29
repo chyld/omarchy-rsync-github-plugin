@@ -6,13 +6,19 @@
 
 <p align="center">
   <b>Back up the files that matter to GitHub, right from the Omarchy bar.</b><br>
-  Dated vaults · full paths kept · rsync under the hood · never force-pushes
+  Dated vaults · full paths kept · rsync under the hood · never force-pushes · not encrypted
 </p>
 
 ---
 
 Back up hand-picked files and folders to one GitHub repository, from the
 Omarchy bar.
+
+> **Not encrypted.** Files are pushed to GitHub as they are. Anyone who can
+> read the repository, or who gets hold of a GitHub token for it, can read
+> them. Use a private repository, and don't rely on the name "vault": files
+> that look like keys or credentials are skipped (see [Secrets](#secrets)),
+> but that is a heuristic, not a guarantee.
 
 - **Vaults** are dated folders in the repository, like `2026-10-01-omarchy`.
   One repository holds many vaults.
@@ -87,8 +93,8 @@ can use (`gh auth login`, then `gh auth setup-git`).
 
 | Where | What |
 | --- | --- |
-| `~/.config/file-vault/config.json` | The repository URL, your vaults and what each holds (0600). |
-| `~/.local/share/file-vault/repos/<owner>/<repo>` | The local copy of the repository. It belongs to the plugin and is reset to GitHub's state before every sync. |
+| `~/.config/file-vault/config.json` | The repository URL, your vaults and what each holds (0600). What waits to be pushed, and when each vault was last pushed, are read from git each time, never stored here. |
+| `~/.local/share/file-vault/repos/<owner>/<repo>` | The local copy of the repository. It belongs to the plugin: File Vault only counts changes made by **1 · Copy to repo**, so don't edit files in it by hand. |
 | GitHub | Only Connect and Push touch the network. |
 
 To remove everything File Vault keeps on this machine, use **Delete local
@@ -102,7 +108,27 @@ never uses sudo), and sockets, FIFOs and devices. Symlinks inside picked
 folders are stored as links; a picked path that is itself a symlink is
 followed. A vault is limited to 100,000 files and 2 GB.
 
-Nothing checks for secrets: whatever you pick is pushed.
+## Secrets
+
+While planning a copy, File Vault skips, and lists as skipped, files that
+look like secrets:
+
+- private keys: `id_rsa`, `id_ed25519` and the other `id_*` keys, `*.key`,
+  `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, and any file that starts with a
+  `-----BEGIN … PRIVATE KEY` block (a `.pem` holding only a certificate is
+  kept);
+- credentials: `.env` and `.env.*` (not `.env.example`, `.sample`,
+  `.template` or `.dist`), `.netrc`, `.git-credentials`, `.pgpass`,
+  `~/.aws/credentials`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`,
+  `~/.kube/config`, and GnuPG's private keys.
+
+This catches the usual places, not a token pasted into any other file.
+Public keys (`id_ed25519.pub`), `~/.ssh/config` and `known_hosts` are
+copied.
+
+To back up secrets anyway, set `"includeSecrets": true` on the vault in
+`config.json` (the pencil). The popup then warns that the vault's keys and
+credentials are pushed unencrypted.
 
 ## Design
 
@@ -110,11 +136,28 @@ Nothing checks for secrets: whatever you pick is pushed.
 - `Service.qml` owns all state and is the only writer of `config.json`;
   `Widget.qml` (one per monitor) only shows it. Which vault is chosen is
   per popup.
-- `engine.py` plans every copy and does every git operation; rsync copies
-  the planned files, comparing size and time to the nanosecond. `engine.py`
-  runs as an argv array under `/usr/bin/timeout` with a minimal environment
-  (`Runner.qml`). Git runs with
-  hooks, fsmonitor and commit signing off, and no terminal prompts.
+- `Service.qml` runs the long jobs (connect, copy, push, reset) one at a
+  time on one runner, and the short commands (load, save, status, folder)
+  in a queue on another; asking again for a waiting command replaces it.
+- `engine.py` is the entry point; the work is in `fv/`: `common` (limits
+  and validation), `places` (data folders, the lock, reset), `config`
+  (config.json and vault definitions), `proc` (running git and rsync),
+  `plan` (what a copy takes and skips, secrets included), `sync` (connect,
+  copy, push, status) and `views` (list and diff). rsync copies the planned
+  files, comparing size and time to the nanosecond. `engine.py` runs as an
+  argv array under `/usr/bin/timeout` with a minimal environment
+  (`Runner.qml`). Git runs with hooks, fsmonitor and commit signing off,
+  and no terminal prompts.
+- The same validation is written twice, in `Safe.js` for the shell and in
+  `fv/common.py`. `tests/vectors.json` holds the cases both must agree on,
+  and both test suites run them.
+- Status is read-only: it reads the index and history, and never stages
+  anything. When each vault was last pushed comes from `git log`, cached in
+  the local copy's `.git` folder until GitHub's branch moves.
+- `keepLoaded` is set so a plugin hot-reload (installing or editing any
+  plugin) doesn't kill a copy or push part way. The catch: after changing
+  or updating this plugin, run `omarchy restart shell` to load the new
+  `Service.qml`.
 - One File Vault command at a time touches the local repositories: the
   engine takes a lock (`~/.local/share/file-vault/lock`) for status, copy,
   push, connect, diff and reset, and clears a git `index.lock` left by a

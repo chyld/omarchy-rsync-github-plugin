@@ -41,13 +41,15 @@ function connect(script, url) {
 
 // Sync button 1: the vault's folder in the local copy updated from
 // `sources` (rsync) and staged, as JSON lines. Null when anything is invalid.
-// `adopt` lets this machine copy over a vault made on another one.
-function copy(script, url, vault, sources, adopt) {
+// `adopt` lets this machine copy over a vault made on another one;
+// `secrets` copies files that look like secrets too.
+function copy(script, url, vault, sources, adopt, secrets) {
   var repo = Safe.repoUrl(url)
   var name = Safe.vaultName(vault)
   if (!repo || !name || !Array.isArray(sources) || sources.length > Safe.MAX_SOURCES) return null
   for (var i = 0; i < sources.length; i++) if (!Safe.sourcePath(sources[i])) return null
-  return [PYTHON, "-I", "-S", script, "copy"].concat(adopt === true ? ["--adopt"] : [], [repo, name, "--"], sources)
+  return [PYTHON, "-I", "-S", script, "copy"].concat(adopt === true ? ["--adopt"] : [], secrets === true ? ["--secrets"] : [],
+                                                    [repo, name, "--"], sources)
 }
 
 // Sync button 2: what was copied committed and pushed, as JSON lines.
@@ -99,12 +101,12 @@ function omarchyBin(root) {
 }
 
 // Every file a sync of `vault` would copy and skip, in less, in a terminal.
-function listFiles(root, script, vault, sources) {
+function listFiles(root, script, vault, sources, secrets) {
   var name = Safe.vaultName(vault)
   if (!name || !Safe.sourcePath(script) || !Array.isArray(sources) || sources.length > Safe.MAX_SOURCES) return null
   for (var i = 0; i < sources.length; i++) if (!Safe.sourcePath(sources[i])) return null
   return [omarchyBin(root) + "/omarchy-launch-tui", "--app-id=org.omarchy.file-vault",
-          PYTHON, "-I", "-S", script, "list", name, "--"].concat(sources)
+          PYTHON, "-I", "-S", script, "list"].concat(secrets === true ? ["--secrets"] : [], [name, "--"], sources)
 }
 
 // A vault's copied changes (or its last pushed one) as a diff, in less, in

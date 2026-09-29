@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Commands.js" as Commands
+import "Safe.js" as Safe
 
 // Runs one command at a time and hands its exit code, stdout and stderr to
 // a callback. The callback runs on the next tick, so it may start the next
@@ -11,8 +12,8 @@ import "Commands.js" as Commands
 // the deadline stops the command and everything it started (git's remote
 // helpers, a credential helper) with TERM, then KILL two seconds later. A
 // backstop timer does the same from here if timeout itself hangs, and on
-// unload. Output is read in chunks under a budget; overflow stops the
-// command and counts as failure. The budget counts characters, not bytes,
+// unload. Output is read in chunks under a budget (1 MiB unless the caller
+// sets one); overflow stops the command and counts as failure. The budget counts characters, not bytes,
 // so it is a second line of defence: the byte limits are at the source,
 // in engine.py. The environment is not inherited: it is
 // the minimal set Commands.environment() builds. A command that cannot
@@ -28,21 +29,23 @@ Item {
   property string out: ""
   property string err: ""
   property bool overflow: false
-  property int budget: 1048576
+  readonly property int defaultBudget: 1048576
+  property int budget: runner.defaultBudget
   property var stdinText: null
   // Streaming mode: stdout is handed to `onLine` one line at a time as it
   // arrives, instead of being collected. A line longer than lineMax stops
   // the command, like the byte budget.
   property var onLine: null
   property string partial: ""
-  property int lineMax: 65536
+  readonly property int lineMax: Safe.LINE_MAX
   property int received: 0
 
   // `callback(code, stdout, stderr)`. `stdin`, when given, is written to the
   // command and then closed. With `lineHandler`, stdout goes to it line by
-  // line and `callback` gets "" for stdout. Returns false when a command is
-  // already running or argv is missing.
-  function run(argv, timeoutMs, callback, stdin, lineHandler) {
+  // line and `callback` gets "" for stdout. `budget`, when given, is the
+  // output allowed in characters. Returns false when a command is already
+  // running or argv is missing.
+  function run(argv, timeoutMs, callback, stdin, lineHandler, budget) {
     if (!argv || runner.running) return false
     var seconds = Math.max(1, Math.ceil((timeoutMs || 30000) / 1000))
     runner.pending = callback || function() {}
@@ -55,6 +58,7 @@ Item {
     runner.onLine = lineHandler || null
     runner.partial = ""
     runner.received = 0
+    runner.budget = budget > 0 ? budget : runner.defaultBudget
     proc.stdinEnabled = runner.stdinText !== null
     proc.command = [Commands.TIMEOUT, "-k", "2", "--", seconds + "s"].concat(argv)
     proc.running = true

@@ -2,12 +2,27 @@
 
 // Validation of everything File Vault's QML handles that is not a literal:
 // the repository URL, vault names, picked paths, the config file and the
-// engine's output. Mirrors the checks in engine.py, which checks again.
+// engine's output. The same rules are in fv/common.py, which checks again;
+// tests/vectors.json holds the cases both must agree on.
 
+// Shared with fv/common.py (tests/vectors.json, "limits").
 var MAX_PATH = 4096
 var MAX_VAULTS = 200
 var MAX_SOURCES = 500
 var MAX_LISTED = 20
+// Characters in one line of engine output; the engine keeps each under it.
+var LINE_MAX = 65536
+
+// The output budget for connect: one line per vault in the repository,
+// each up to LINE_MAX, and a few more.
+function connectBudget() { return (MAX_VAULTS + 16) * LINE_MAX }
+
+// Characters, not UTF-16 units, as Python counts them.
+function length(s) { return Array.from(s).length }
+
+// The ASCII whitespace Python and JavaScript agree on, trimmed from a
+// pasted URL.
+function trim(s) { return s.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, "") }
 
 // Control, bidirectional and other invisible characters.
 var CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/
@@ -15,7 +30,7 @@ var CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\
 // https://github.com/<owner>/<repo>, normalized to ...<repo>.git, or "".
 function repoUrl(value) {
   if (typeof value !== "string") return ""
-  var m = /^https:\/\/github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/.exec(value.trim())
+  var m = /^https:\/\/github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/.exec(trim(value))
   if (!m || m[2] === "." || m[2] === "..") return ""
   return "https://github.com/" + m[1] + "/" + m[2] + ".git"
 }
@@ -38,12 +53,15 @@ function isoDate(date) {
   return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate())
 }
 
-// A real calendar date written yyyy-mm-dd, or "".
+// A real calendar date written yyyy-mm-dd, years 0001 to 9999, or "".
 function cleanDate(value) {
-  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(typeof value === "string" ? value.trim() : "")
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(typeof value === "string" ? trim(value) : "")
   if (!m) return ""
-  var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-  return isoDate(d) === m[0] ? m[0] : ""
+  var y = Number(m[1]), mo = Number(m[2]) - 1, day = Number(m[3])
+  // setFullYear, because new Date(y, ...) reads years 0 to 99 as 1900 to 1999.
+  var d = new Date(2000, 0, 1)
+  d.setFullYear(y, mo, day)
+  return y >= 1 && d.getFullYear() === y && d.getMonth() === mo && d.getDate() === day ? m[0] : ""
 }
 
 // yyyy-mm-dd-<name>: a real date, then letters, digits, ., _ or -, or "".
@@ -57,7 +75,8 @@ function vaultName(value) {
 // An absolute path, not /, with no control characters and no ., .. or empty
 // parts; a trailing / is dropped. "" otherwise.
 function sourcePath(value) {
-  if (typeof value !== "string" || value.length < 2 || value.length > MAX_PATH) return ""
+  // UTF-16 length is never less than the character count.
+  if (typeof value !== "string" || value.length < 2 || (value.length > MAX_PATH && length(value) > MAX_PATH)) return ""
   if (value.charAt(0) !== "/" || CONTROL.test(value)) return ""
   var s = value.replace(/\/+$/, "")
   if (s.length < 2) return ""
@@ -79,7 +98,9 @@ function plain(value, max) {
   var s = String(value === undefined || value === null ? "" : value)
   s = s.replace(new RegExp(CONTROL.source, "g"), "")
   var cap = max || 120
-  return s.length > cap ? s.slice(0, cap - 1) + "\u2026" : s
+  if (s.length <= cap) return s
+  var chars = Array.from(s)
+  return chars.length > cap ? chars.slice(0, cap - 1).join("") + "\u2026" : s
 }
 
 // Plain text safe for the host's tooltips, which may render markup.
@@ -97,7 +118,8 @@ function shortTime(date, now) {
 // ------------------------------------------------------------ config
 
 // The config with every unknown or invalid part dropped:
-// { version: 1, repoUrl, vaults: [{ name, repoUrl, sources, lastSync, lastSummary, machine, machineName }] }
+// { version: 1, repoUrl, vaults: [{ name, repoUrl, sources, includeSecrets, lastSummary, machine, machineName }] }
+// When a vault was pushed isn't here: git knows it, and status reports it.
 // The top-level repoUrl is the connected repository; each vault's is the one
 // it is linked to ("" before its first connect).
 function config(value) {
@@ -122,8 +144,8 @@ function config(value) {
       var p = sourcePath(raw[j])
       if (p && sources.indexOf(p) === -1) sources.push(p)
     }
-    var last = typeof v.lastSync === "number" && v.lastSync > 0 && v.lastSync < 4398046511104 ? Math.floor(v.lastSync) : 0
-    out.vaults.push({ name: name, repoUrl: repoPage(v.repoUrl), sources: sources, lastSync: last,
+    out.vaults.push({ name: name, repoUrl: repoPage(v.repoUrl), sources: sources,
+                      includeSecrets: v.includeSecrets === true,
                       machine: machineId(v.machine),
                       machineName: typeof v.machineName === "string" ? plain(v.machineName, 64) : "",
                       lastSummary: typeof v.lastSummary === "string" ? plain(v.lastSummary, 120) : "" })
@@ -195,13 +217,20 @@ function engineEvent(line) {
   if (e.event === "pushed")
     return { event: "pushed", vaults: vaultList(e.vaults, MAX_VAULTS),
              commit: /^[0-9a-f]{4,40}$/.test(e.commit || "") ? e.commit : "" }
-  if (e.event === "status") {
-    var pending = {}
-    var raw = e.pending && typeof e.pending === "object" ? e.pending : {}
+  // {vault: positive number}, keeping valid names only.
+  var counts = function(value, max) {
+    var out = {}
+    var raw = value && typeof value === "object" && !Array.isArray(value) ? value : {}
     var keys = Object.keys(raw).slice(0, MAX_VAULTS)
-    for (var k = 0; k < keys.length; k++) if (vaultName(keys[k]) && n(raw[keys[k]]) > 0) pending[keys[k]] = n(raw[keys[k]])
-    return { event: "status", cloned: e.cloned === true, pending: pending, unpushed: vaultList(e.unpushed, MAX_VAULTS) }
+    for (var k = 0; k < keys.length; k++) {
+      var v = raw[keys[k]]
+      if (vaultName(keys[k]) && typeof v === "number" && v > 0 && v < max) out[keys[k]] = Math.floor(v)
+    }
+    return out
   }
+  if (e.event === "status")
+    return { event: "status", cloned: e.cloned === true, pending: counts(e.pending, 1e15),
+             unpushed: vaultList(e.unpushed, MAX_VAULTS), pushedAt: counts(e.pushedAt, 4398046511) }
   if (e.event !== "copied") return null
   var skipped = []
   var rawSkipped = Array.isArray(e.skipped) ? e.skipped.slice(0, MAX_LISTED) : []
@@ -217,10 +246,10 @@ function size(bytes) {
   return (bytes / 1073741824).toFixed(2) + " GB"
 }
 
-// "12 files · 48 KB · 3 to push"
+// "12 files · 48 KB · 2 skipped": what a copy took. What waits to be
+// pushed changes after it, so the live status shows that instead.
 function summary(e) {
   var parts = [e.files + (e.files === 1 ? " file" : " files"), size(e.bytes)]
-  parts.push(e.changed === 0 ? "nothing new" : e.changed + " to push")
   if (e.skippedCount > 0) parts.push(e.skippedCount + " skipped")
   return parts.join(" \u00b7 ")
 }

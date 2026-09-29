@@ -105,7 +105,7 @@ Panel {
     if (n > 0) return { text: n + (n === 1 ? " change" : " changes") + " to push", color: Color.accent }
     if (s.unpushed.indexOf(v.name) !== -1) return { text: "ready to push", color: Color.accent }
     if (!s.owns(v)) return { text: "from " + (v.machineName || "another machine"), color: Util.alpha(root.barForeground, 0.6) }
-    if (v.lastSync) return { text: "synced " + Safe.shortTime(new Date(v.lastSync), new Date()), color: Color.accent }
+    if (s.pushedAt[v.name]) return { text: "synced " + Safe.shortTime(new Date(s.pushedAt[v.name]), new Date()), color: Color.accent }
     return { text: "never synced", color: Util.alpha(root.barForeground, 0.6) }
   }
 
@@ -470,6 +470,11 @@ Panel {
               : !Safe.cleanDate(dateField.text) ? "Use a date like 2026-10-01."
               : "Letters, digits, dots, dashes or underscores."
             dot: bad ? Color.urgent : root.newName ? Color.accent : Util.alpha(root.barForeground, 0.45)
+          }
+
+          Hint {
+            text: "Files are pushed as they are, not encrypted: keep the repository private. "
+              + "Files that look like keys or credentials are skipped."
           }
 
           Row {
@@ -839,6 +844,12 @@ Panel {
               : "Not linked to a repository yet: connect one to link it."
           }
 
+          // Set by hand in config.json only.
+          Warning {
+            visible: root.chosenVault !== null && root.chosenVault.includeSecrets
+            text: "Secrets included: keys and credentials in this vault are pushed to GitHub unencrypted."
+          }
+
           Warning {
             readonly property string error: root.service && root.chosen ? (root.service.errors[root.chosen] || "") : ""
             visible: error !== ""
@@ -852,8 +863,9 @@ Panel {
               var v = root.chosenVault
               if (!v) return ""
               var parts = []
+              var pushed = root.service.pushedAt[v.name]
               if (v.lastSummary) parts.push("Last copy \u00b7 " + v.lastSummary)
-              if (v.lastSync) parts.push("pushed " + Safe.shortTime(new Date(v.lastSync), new Date()))
+              if (pushed) parts.push("pushed " + Safe.shortTime(new Date(pushed), new Date()))
               return parts.join(" \u00b7 ")
             }
           }

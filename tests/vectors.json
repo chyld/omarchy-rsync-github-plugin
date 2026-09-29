@@ -1,0 +1,96 @@
+{
+  "about": "Cases fv/common.py (Python) and Safe.js (the shell) must agree on. tests/test_engine.py and tests/safe.test.mjs both run every one. Each case is [input, expected]; an input {\"prefix\", \"repeat\", \"times\"} stands for prefix + repeat * times, and an expected \"=\" means the input unchanged.",
+  "limits": {"MAX_VAULTS": 200, "MAX_SOURCES": 500, "MAX_LISTED": 20, "MAX_PATH": 4096, "LINE_MAX": 65536},
+  "repoUrl": [
+    ["https://github.com/chyld/backups", "https://github.com/chyld/backups.git"],
+    ["https://github.com/chyld/backups.git/", "https://github.com/chyld/backups.git"],
+    [" https://github.com/chyld/backups\n", "https://github.com/chyld/backups.git"],
+    ["https://github.com/chyld/my.repo", "https://github.com/chyld/my.repo.git"],
+    [" https://github.com/chyld/backups", ""],
+    ["\u0085https://github.com/chyld/backups", ""],
+    ["http://github.com/chyld/backups", ""],
+    ["git@github.com:chyld/backups.git", ""],
+    ["https://github.com/chyld", ""],
+    ["https://github.com/chyld/..", ""],
+    ["https://github.com/-chyld/backups", ""],
+    ["https://github.com/chyld/backups/tree/main", ""],
+    ["https://github.com/chyld/backups?x", ""],
+    ["https://user@github.com/chyld/backups", ""],
+    [null, ""],
+    [7, ""]
+  ],
+  "vaultName": [
+    ["2026-10-01-omarchy", "="],
+    ["2026-10-01-My_Laptop.v2", "="],
+    ["2024-02-29-leap", "="],
+    ["0099-01-01-old", "="],
+    [{"prefix": "2026-10-01-", "repeat": "a", "times": 64}, "="],
+    [{"prefix": "2026-10-01-", "repeat": "a", "times": 65}, ""],
+    ["0000-01-01-x", ""],
+    ["2026-02-29-x", ""],
+    ["2026-13-01-x", ""],
+    ["٢٠٢٦-10-01-x", ""],
+    ["2026-10-01-x\n", ""],
+    ["2026-10-01-", ""],
+    ["2026-10-01-.x", ""],
+    ["2026-10-01-x.", ""],
+    ["2026-10-01-x.lock", ""],
+    ["2026-10-01-a/b", ""],
+    ["2026-10-01-a b", ""],
+    ["2026-10-01-é", ""],
+    ["26-10-01-x", ""],
+    [null, ""]
+  ],
+  "sourcePath": [
+    ["/home/u/.bashrc", "="],
+    ["/home/u/My Docs", "="],
+    ["/home/u/dir///", "/home/u/dir"],
+    [{"prefix": "/", "repeat": "😀", "times": 2100}, "="],
+    [{"prefix": "/", "repeat": "a", "times": 4095}, "="],
+    [{"prefix": "/", "repeat": "a", "times": 4096}, ""],
+    ["", ""],
+    ["/", ""],
+    ["//", ""],
+    ["rel/path", ""],
+    ["/a/../b", ""],
+    ["/a/./b", ""],
+    ["/a//b", ""],
+    ["/a\nb", ""],
+    ["/a\u0085b", ""],
+    ["/a‮b", ""],
+    [3, ""]
+  ],
+  "machineId": [
+    ["0123456789abcdef", "="],
+    ["0123456789ABCDEF", ""],
+    ["0123", ""],
+    [5, ""]
+  ],
+  "plain": [
+    [["a\nb", 10], "ab"],
+    [["x‮y\u0000", 10], "xy"],
+    [["abcdef", 4], "abc…"],
+    [["abcd", 4], "abcd"],
+    [["😀😀😀😀😀", 3], "😀😀…"]
+  ],
+  "config": [
+    [[], {"version": 1, "repoUrl": "", "vaults": []}],
+    [
+      {"repoUrl": "https://github.com/chyld/backups.git", "extra": 1, "vaults": [
+        {"name": "2026-10-01-omarchy", "sources": ["/etc/hosts", "rel", "/etc/hosts", 5], "lastSync": 5,
+         "lastSummary": "a\nb", "includeSecrets": true, "machine": "0123456789abcdef", "machineName": "lap\ntop"},
+        {"name": "2026-10-01-omarchy"},
+        {"name": "bad"},
+        null,
+        7,
+        {"name": "2026-10-02-b", "repoUrl": "https://gitlab.com/x/y", "includeSecrets": "yes", "machine": "nope"}
+      ]},
+      {"version": 1, "repoUrl": "https://github.com/chyld/backups", "vaults": [
+        {"name": "2026-10-01-omarchy", "repoUrl": "", "sources": ["/etc/hosts"], "includeSecrets": true,
+         "lastSummary": "ab", "machine": "0123456789abcdef", "machineName": "laptop"},
+        {"name": "2026-10-02-b", "repoUrl": "", "sources": [], "includeSecrets": false,
+         "lastSummary": "", "machine": "", "machineName": ""}
+      ]}
+    ]
+  ]
+}

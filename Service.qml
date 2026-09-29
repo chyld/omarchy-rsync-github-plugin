@@ -18,7 +18,7 @@ import "Commands.js" as Commands
 //   Logo.qml       the bar mark, changing with the state
 //   Runner.qml     runs one command at a time: deadline, byte budget,
 //                  minimal environment
-//   engine.py      the config file and every file and git operation
+//   engine.py      the config file and every file and git operation (fv/)
 //   Commands.js    every command the shell runs
 //   Safe.js        validation of everything that is not a literal
 //
@@ -44,7 +44,7 @@ Item {
   // each one holds. This service writes it, and reads it again whenever it
   // changes, so it can also be edited by hand (Edit in the popup). Every
   // popup (one per monitor's bar) shows the same thing. Changes show at once
-  // and are written in the background, one command at a time.
+  // and are written in the background, through the queue below.
   //
   // A file that isn't valid JSON is never saved over: nothing can change
   // until it is fixed. Entries left out as invalid are listed in `problems`.
@@ -53,12 +53,44 @@ Item {
   property bool loaded: false
   property string configError: ""
   property var problems: []
-  property bool saveAgain: false
-  property bool loadAgain: false
   // Counts changes made here, so a read that started before one is dropped.
   property int changes: 0
 
+  // ------------------------------------------------------------ short commands
+
+  // Two runners: `runner` for the long jobs (connect, copy, push, reset),
+  // and `io` for the short commands (load, save, status, folder), which
+  // take turns in this queue, in the order asked. Asking again for one
+  // that is still waiting replaces it, keeping its callbacks, so a burst
+  // of saves writes once, with the latest config.
   Runner { id: io }
+  property var queue: []
+
+  // `start(finish)` starts one command on io and returns whether it
+  // started; the command's callback calls finish(ok). `then(ok)`, when
+  // given, runs after it.
+  function enqueue(key, start, then) {
+    var thens = then ? [then] : []
+    var rest = []
+    for (var i = 0; i < svc.queue.length; i++) {
+      if (svc.queue[i].key === key) thens = svc.queue[i].thens.concat(thens)
+      else rest.push(svc.queue[i])
+    }
+    rest.push({ key: key, start: start, thens: thens })
+    svc.queue = rest
+    svc.drain()
+  }
+
+  function drain() {
+    if (io.running || svc.queue.length === 0) return
+    var item = svc.queue[0]
+    svc.queue = svc.queue.slice(1)
+    var finish = function(ok) {
+      for (var i = 0; i < item.thens.length; i++) item.thens[i](ok)
+      svc.drain()
+    }
+    if (!item.start(finish)) Qt.callLater(function() { finish(false) })
+  }
 
   Component.onCompleted: svc.load()
 
@@ -82,41 +114,40 @@ Item {
 
   function load() {
     if (!svc.engineScript) { svc.configError = "Can't find engine.py."; return }
-    if (io.running) { svc.loadAgain = true; return }
-    svc.loadAgain = false
-    var changes = svc.changes
-    io.run(Commands.load(svc.engineScript), 10000, function(code, out, err) {
-      svc.next()
-      // A change made here since the read started is newer; its save follows.
-      if (changes !== svc.changes || svc.saveAgain) return
-      var result = null
-      try { result = code === 0 ? JSON.parse(out) : null } catch (e) { result = null }
-      if (result && result.config) {
-        if (result.machine && typeof result.machine === "object") {
-          svc.machineId = Safe.machineId(result.machine.id)
-          svc.machineName = Safe.plain(result.machine.name || "", 64)
-        }
-        svc.config = Safe.config(result.config)
-        svc.problems = Array.isArray(result.problems) ? result.problems.slice(0, 20).map(function(p) { return Safe.plain(p, 200) }) : []
-        svc.loaded = true
-        svc.configError = ""
-        // Create the file on first start, so there is a file to watch and
-        // to open with Edit.
-        if (result.exists === false) svc.save()
-        svc.refreshStatus()
-      } else {
-        svc.loaded = false
-        svc.problems = []
-        svc.configError = Safe.plain(String(err || "Couldn't read config.json").trim().replace(/\.?$/, "."), 200)
-          + " Fix it with Edit."
-      }
+    svc.enqueue("load", function(finish) {
+      var changes = svc.changes
+      return io.run(Commands.load(svc.engineScript), 10000, function(code, out, err) {
+        svc.applyLoad(changes, code, out, err)
+        finish(code === 0)
+      })
     })
   }
 
-  // Whatever is waiting runs next: a save before a read.
-  function next() {
-    if (svc.saveAgain) Qt.callLater(svc.save)
-    else if (svc.loadAgain) Qt.callLater(svc.load)
+  // A load's result: the config, or why it can't be read.
+  function applyLoad(changes, code, out, err) {
+    // A change made here since the read started is newer; its save follows.
+    if (changes !== svc.changes) return
+    var result = null
+    try { result = code === 0 ? JSON.parse(out) : null } catch (e) { result = null }
+    if (result && result.config) {
+      if (result.machine && typeof result.machine === "object") {
+        svc.machineId = Safe.machineId(result.machine.id)
+        svc.machineName = Safe.plain(result.machine.name || "", 64)
+      }
+      svc.config = Safe.config(result.config)
+      svc.problems = Array.isArray(result.problems) ? result.problems.slice(0, 20).map(function(p) { return Safe.plain(p, 200) }) : []
+      svc.loaded = true
+      svc.configError = ""
+      // Create the file on first start, so there is a file to watch and
+      // to open with Edit.
+      if (result.exists === false) svc.save()
+      svc.refreshStatus()
+    } else {
+      svc.loaded = false
+      svc.problems = []
+      svc.configError = Safe.plain(String(err || "Couldn't read config.json").trim().replace(/\.?$/, "."), 200)
+        + " Fix it with Edit."
+    }
   }
 
   function setConfig(next) {
@@ -127,18 +158,16 @@ Item {
     svc.save()
   }
 
+  // Writes the config as it is when the save starts, not when it was asked.
   function save(then) {
     if (!svc.loaded) return
-    if (io.running) { svc.saveAgain = true; return }
-    svc.saveAgain = false
-    var text = JSON.stringify(svc.config)
-    var started = io.run(Commands.save(svc.engineScript), 10000, function(code, out, err) {
-      svc.configError = code === 0 ? "" : "Couldn't save config.json: " + Safe.plain(err || "error " + code, 160)
-      svc.rewatch()
-      if (typeof then === "function") then(code === 0)
-      svc.next()
-    }, text)
-    if (!started) svc.saveAgain = true
+    svc.enqueue("save", function(finish) {
+      return io.run(Commands.save(svc.engineScript), 10000, function(code, out, err) {
+        svc.configError = code === 0 ? "" : "Couldn't save config.json: " + Safe.plain(err || "error " + code, 160)
+        svc.rewatch()
+        finish(code === 0)
+      }, JSON.stringify(svc.config))
+    }, typeof then === "function" ? then : null)
   }
 
   // Opens config.json in the default editor, saving it first so it exists.
@@ -146,7 +175,7 @@ Item {
   function editConfig() {
     var argv = Commands.edit(svc.omarchyRoot, svc.configPath)
     if (!argv) return
-    if (svc.loaded && !io.running) svc.save(function() { Quickshell.execDetached(argv) })
+    if (svc.loaded) svc.save(function() { Quickshell.execDetached(argv) })
     else Quickshell.execDetached(argv)
   }
 
@@ -212,16 +241,9 @@ Item {
       var imported = 0
       for (var j = 0; j < found.length; j++) {
         var r = found[j]
-        var known = Safe.findVault(next, r.name)
-        // When it last changed on GitHub, for a vault that doesn't know
-        // (added here, or its settings deleted and connected again).
-        if (known) {
-          if (!known.lastSync && known.repoUrl === page) known.lastSync = r.pushedAt * 1000
-          continue
-        }
-        if (next.vaults.length >= Safe.MAX_VAULTS) continue
+        if (Safe.findVault(next, r.name) || next.vaults.length >= Safe.MAX_VAULTS) continue
         var unknown = !r.defined || !r.machine.id
-        next.vaults.push({ name: r.name, repoUrl: page, sources: r.sources, lastSync: r.pushedAt * 1000, lastSummary: "",
+        next.vaults.push({ name: r.name, repoUrl: page, sources: r.sources, includeSecrets: false, lastSummary: "",
                            machine: unknown ? svc.unknownMachine : r.machine.id,
                            machineName: unknown ? "" : r.machine.name })
         imported++
@@ -229,7 +251,7 @@ Item {
       svc.connection = { url: page, branch: result.branch, empty: result.empty, vaults: found,
                          imported: imported, at: Date.now() }
       svc.setConfig(next)
-    }, function(e) { if (found.length < Safe.MAX_VAULTS) found.push(e) })
+    }, function(e) { if (found.length < Safe.MAX_VAULTS) found.push(e) }, Safe.connectBudget())
   }
 
   // Adds the vault <date>-<name>; returns "" or why it can't.
@@ -242,7 +264,7 @@ Item {
     if (svc.vault(full)) return full + " already exists."
     if (svc.vaults.length >= Safe.MAX_VAULTS) return "Too many vaults."
     var next = Safe.config(svc.config)
-    next.vaults.push({ name: full, repoUrl: svc.repoUrl, sources: [], lastSync: 0, lastSummary: "",
+    next.vaults.push({ name: full, repoUrl: svc.repoUrl, sources: [], includeSecrets: false, lastSummary: "",
                        machine: svc.machineId, machineName: svc.machineName })
     svc.setConfig(next)
     return ""
@@ -251,25 +273,26 @@ Item {
   // Every file a sync of the vault would copy and skip, in a terminal.
   function showFiles(name) {
     var v = svc.vault(name)
-    var argv = v ? Commands.listFiles(svc.omarchyRoot, svc.engineScript, name, v.sources) : null
+    var argv = v ? Commands.listFiles(svc.omarchyRoot, svc.engineScript, name, v.sources, v.includeSecrets) : null
     if (argv) Quickshell.execDetached(argv)
   }
 
   // ------------------------------------------------------------ local copy
 
-  Runner { id: aux }
   property string notice: ""
 
   // Opens the local copy of the repository in the file manager. It exists
   // from the first connect on.
   function openFolder() {
-    var argv = Commands.folder(svc.engineScript, svc.repoUrl)
-    if (!argv || aux.running) return
     svc.notice = ""
-    aux.run(argv, 10000, function(code, out) {
-      var open = code === 0 ? Commands.openFolder(out.trim()) : null
-      if (open) Quickshell.execDetached(open)
-      else svc.notice = code === 4 ? "There is no local copy yet: press Connect." : "Couldn't find the local copy."
+    svc.enqueue("folder", function(finish) {
+      var argv = Commands.folder(svc.engineScript, svc.repoUrl)
+      return io.run(argv, 10000, function(code, out) {
+        var open = code === 0 ? Commands.openFolder(out.trim()) : null
+        if (open) Quickshell.execDetached(open)
+        else svc.notice = code === 4 ? "There is no local copy yet: press Connect." : "Couldn't find the local copy."
+        finish(code === 0)
+      })
     })
   }
 
@@ -360,8 +383,9 @@ Item {
 
   // Runs one engine command that reports JSON lines. `done(result, failure)`
   // gets its last event, or null and why it failed; `each(event)`, when
-  // given, gets every other event as it arrives.
-  function runJob(kind, vault, argv, done, each) {
+  // given, gets every other event as it arrives. `budget` is the output
+  // allowed, when more than the runner's default.
+  function runJob(kind, vault, argv, done, each, budget) {
     // A reset also works with a config.json that can't be read: it is the
     // way out.
     if (!argv || (!svc.loaded && kind !== "reset") || svc.busy || runner.running) return
@@ -385,7 +409,7 @@ Item {
       else if (e.event === "error") error = e.message
       else if (each && e.event === "vault") each(e)
       else result = e
-    })
+    }, budget)
     if (!started) {
       svc.job = ""
       svc.jobVault = ""
@@ -403,7 +427,7 @@ Item {
     // Adopted (or made) here and recorded as this machine's: the engine may
     // copy over a definition from another machine.
     var adopted = svc.machineId !== "" && v.machine === svc.machineId
-    var argv = Commands.copy(svc.engineScript, v.repoUrl, name, v.sources, adopted)
+    var argv = Commands.copy(svc.engineScript, v.repoUrl, name, v.sources, adopted, v.includeSecrets)
     svc.runJob("copy", name, argv, function(result, failure) {
       if (!result) { svc.errors = svc.setIn(svc.errors, name, failure); return }
       svc.skipped = svc.setIn(svc.skipped, name, { list: result.skipped, count: result.skippedCount })
@@ -417,16 +441,12 @@ Item {
   }
 
   // Sync button 2: everything copied into the local copy, for every vault,
-  // committed and pushed to the connected repository.
+  // committed and pushed to the connected repository. When each vault was
+  // pushed comes from git, in the status read that follows.
   function push() {
     svc.pushError = ""
     svc.runJob("push", "", Commands.push(svc.engineScript, svc.repoUrl), function(result, failure) {
-      if (!result) { svc.pushError = failure; return }
-      var now = Date.now()
-      var next = Safe.config(svc.config)
-      for (var i = 0; i < next.vaults.length; i++)
-        if (result.vaults.indexOf(next.vaults[i].name) !== -1) next.vaults[i].lastSync = now
-      svc.setConfig(next)
+      if (!result) svc.pushError = failure
     })
   }
 
@@ -443,7 +463,7 @@ Item {
   // touched. The empty config.json is made again, as on a first start.
   function resetAll() {
     if (svc.busy || io.running) return
-    svc.saveAgain = false
+    svc.queue = []
     svc.runJob("reset", "", Commands.reset(svc.engineScript), function(result, failure) {
       if (!result) { svc.notice = "Couldn't delete everything: " + failure; return }
       svc.changes++
@@ -457,6 +477,7 @@ Item {
       svc.skipped = {}
       svc.pending = {}
       svc.unpushed = []
+      svc.pushedAt = {}
       svc.cloned = false
       svc.notice = "Deleted all local data. Paste a repository URL to start again."
       svc.load()
@@ -465,14 +486,13 @@ Item {
 
   // ------------------------------------------------------------ status
 
-  // Read from the local copy of the connected repository: per vault, the
-  // changes copied but not pushed, and the vaults with commits not pushed.
+  // Read from the local copy of the connected repository, never stored: per
+  // vault, the changes copied but not pushed, the vaults with commits not
+  // pushed, and when each was last pushed (ms).
   property var pending: ({})
   property var unpushed: []
+  property var pushedAt: ({})
   property bool cloned: false
-  property bool statusAgain: false
-
-  Runner { id: probe }
 
   // Asked for often (a load, a save, the end of every job): the requests
   // within a quarter second become one read.
@@ -484,23 +504,31 @@ Item {
     onTriggered: svc.readStatus()
   }
 
-  // Not while a job runs (the engine would wait for it anyway): asked again
-  // when the job ends.
+  // Not while a job runs (the engine would wait for it, holding up the
+  // queue): every job asks again when it ends.
   function readStatus() {
-    var argv = Commands.status(svc.engineScript, svc.repoUrl)
-    if (!argv) { svc.pending = {}; svc.unpushed = []; svc.cloned = false; return }
-    if (svc.busy || probe.running) { svc.statusAgain = true; return }
-    svc.statusAgain = false
-    var url = svc.repoUrl
-    probe.run(argv, 60000, function(code, out) {
-      var lines = out.split("\n")
-      for (var i = lines.length - 1; i >= 0; i--) {
-        var e = Safe.engineEvent(lines[i])
-        if (!e || e.event !== "status") continue
-        if (url === svc.repoUrl) { svc.pending = e.pending; svc.unpushed = e.unpushed; svc.cloned = e.cloned }
-        break
-      }
-      if (svc.statusAgain) svc.refreshStatus()
+    if (!Commands.status(svc.engineScript, svc.repoUrl)) {
+      svc.pending = {}; svc.unpushed = []; svc.pushedAt = {}; svc.cloned = false
+      return
+    }
+    if (svc.busy) return
+    svc.enqueue("status", function(finish) {
+      var url = svc.repoUrl
+      var argv = svc.busy ? null : Commands.status(svc.engineScript, url)
+      return io.run(argv, 60000, function(code, out) {
+        var lines = out.split("\n")
+        for (var i = lines.length - 1; i >= 0; i--) {
+          var e = Safe.engineEvent(lines[i])
+          if (!e || e.event !== "status") continue
+          if (url === svc.repoUrl) {
+            var times = {}
+            for (var k in e.pushedAt) times[k] = e.pushedAt[k] * 1000
+            svc.pending = e.pending; svc.unpushed = e.unpushed; svc.pushedAt = times; svc.cloned = e.cloned
+          }
+          break
+        }
+        finish(code === 0)
+      })
     })
   }
 

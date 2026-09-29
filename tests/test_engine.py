@@ -1,4 +1,4 @@
-"""Tests for engine.py. Run with: python3 -m unittest discover -s tests
+"""Tests for engine.py and the fv package. Run with: python3 -m unittest discover -s tests
 
 Nothing here touches GitHub or the real home directory: home() points at a
 temporary folder, and sync runs against a local bare repository."""
@@ -16,6 +16,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import engine  # noqa: E402
+from fv import common, config, places, plan, proc, sync, views  # noqa: E402
 
 URL = "https://github.com/chyld/backups.git"
 
@@ -24,28 +25,28 @@ class Validation(unittest.TestCase):
     def test_repo_url(self):
         for ok in ["https://github.com/chyld/backups", "https://github.com/chyld/backups.git",
                    "https://github.com/chyld/backups/", " https://github.com/chyld/backups "]:
-            self.assertEqual(engine.repo_url(ok), URL, ok)
+            self.assertEqual(common.repo_url(ok), URL, ok)
         for bad in ["", "http://github.com/chyld/backups", "git@github.com:chyld/backups.git",
                     "https://gitlab.com/chyld/backups", "https://github.com/chyld", "https://github.com/chyld/..",
                     "https://github.com/chyld/backups/tree/main", "https://user@github.com/chyld/b", None, 7]:
-            self.assertEqual(engine.repo_url(bad), "", bad)
+            self.assertEqual(common.repo_url(bad), "", bad)
 
     def test_vault_name(self):
         for ok in ["2026-10-01-omarchy", "2026-02-28-a", "2026-10-01-My_Laptop.v2"]:
-            self.assertEqual(engine.vault_name(ok), ok)
+            self.assertEqual(common.vault_name(ok), ok)
         for bad in ["", "omarchy", "2026-10-01", "2026-10-01-", "2026-13-01-x", "2026-02-30-x",
                     "2026-10-01-../x", "2026-10-01-a/b", "2026-10-01-.x", "2026-10-01-x.", "2026-10-01-x.lock",
                     "2026-10-01-a b", "26-10-01-x", None]:
-            self.assertEqual(engine.vault_name(bad), "", bad)
+            self.assertEqual(common.vault_name(bad), "", bad)
 
     def test_source_path(self):
-        self.assertEqual(engine.source_path("/home/u/.bashrc"), "/home/u/.bashrc")
-        self.assertEqual(engine.source_path("/home/u/My Docs/"), "/home/u/My Docs")
+        self.assertEqual(common.source_path("/home/u/.bashrc"), "/home/u/.bashrc")
+        self.assertEqual(common.source_path("/home/u/My Docs/"), "/home/u/My Docs")
         for bad in ["", "/", "//", "rel/path", "/home/../etc", "/home/./u", "/a//b", "/a\nb", "/a\u202eb", None]:
-            self.assertEqual(engine.source_path(bad), "", bad)
+            self.assertEqual(common.source_path(bad), "", bad)
 
     def test_normalize_drops_invalid_parts(self):
-        cfg = engine.normalize({
+        cfg = config.normalize({
             "repoUrl": "https://github.com/chyld/backups.git",
             "extra": 1,
             "vaults": [
@@ -54,13 +55,14 @@ class Validation(unittest.TestCase):
                 {"name": "2026-10-01-omarchy", "sources": []},   # duplicate
                 {"name": "bad"}, None,
             ]})
+        # lastSync is no longer kept: git knows when a vault was pushed.
         self.assertEqual(cfg, {"version": 1, "repoUrl": "https://github.com/chyld/backups", "vaults": [
-            {"name": "2026-10-01-omarchy", "repoUrl": "", "sources": ["/home/u/.bashrc"], "lastSync": 1790000000,
+            {"name": "2026-10-01-omarchy", "repoUrl": "", "sources": ["/home/u/.bashrc"], "includeSecrets": False,
              "lastSummary": "3 files", "machine": "", "machineName": ""}]})
 
     def test_vault_links_are_normalized(self):
         problems = []
-        cfg = engine.normalize({"vaults": [
+        cfg = config.normalize({"vaults": [
             {"name": "2026-10-01-a", "repoUrl": "https://github.com/chyld/backups.git"},
             {"name": "2026-10-01-b", "repoUrl": "https://gitlab.com/x/y"}]}, problems)
         self.assertEqual([v["repoUrl"] for v in cfg["vaults"]], ["https://github.com/chyld/backups", ""])
@@ -69,8 +71,57 @@ class Validation(unittest.TestCase):
     def test_push_permission_errors_read_clearly(self):
         for err in ["remote: Permission to chyld/backups.git denied to someone.",
                     "fatal: unable to access 'https://github.com/a/b/': The requested URL returned error: 403"]:
-            self.assertEqual(engine.git_error(err), "Your GitHub account can't push to this repository.")
-        self.assertEqual(engine.normalize("nope"), {"version": 1, "repoUrl": "", "vaults": []})
+            self.assertEqual(proc.git_error(err), "Your GitHub account can't push to this repository.")
+        self.assertEqual(config.normalize("nope"), {"version": 1, "repoUrl": "", "vaults": []})
+
+
+VECTORS = os.path.join(os.path.dirname(__file__), "vectors.json")
+
+
+def expand(value):
+    """A vectors.json input: {"prefix", "repeat", "times"} spelled out."""
+    if isinstance(value, dict) and "repeat" in value:
+        return value["prefix"] + value["repeat"] * value["times"]
+    return value
+
+
+class SharedVectors(unittest.TestCase):
+    """The cases Safe.js must agree on too (tests/safe.test.mjs runs them)."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(VECTORS, encoding="utf-8") as f:
+            cls.v = json.load(f)
+
+    def check(self, key, fn):
+        for raw, expected in self.v[key]:
+            value = expand(raw)
+            want = value if expected == "=" else expected
+            self.assertEqual(fn(value), want, f"{key}({value!r:.80})")
+
+    def test_limits(self):
+        for name, value in self.v["limits"].items():
+            self.assertEqual(getattr(common, name), value, name)
+        self.assertLess(common.EVENT_MAX, common.LINE_MAX)
+
+    def test_repo_url(self):
+        self.check("repoUrl", common.repo_url)
+
+    def test_vault_name(self):
+        self.check("vaultName", common.vault_name)
+
+    def test_source_path(self):
+        self.check("sourcePath", common.source_path)
+
+    def test_machine_id(self):
+        self.check("machineId", common.machine_id)
+
+    def test_plain(self):
+        for (value, cap), expected in self.v["plain"]:
+            self.assertEqual(common.plain(value, cap), expected)
+
+    def test_config(self):
+        self.check("config", config.normalize)
 
 
 class Home(unittest.TestCase):
@@ -79,7 +130,7 @@ class Home(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = os.path.realpath(self.tmp.name)
-        p = mock.patch.object(engine, "home", return_value=self.home)
+        p = mock.patch.object(places, "home", return_value=self.home)
         p.start()
         self.addCleanup(p.stop)
         self.addCleanup(self.tmp.cleanup)
@@ -98,13 +149,13 @@ class Home(unittest.TestCase):
 
 class Config(Home):
     def test_missing_config_loads_empty(self):
-        self.assertEqual(engine.load(), {"config": {"version": 1, "repoUrl": "", "vaults": []}, "problems": [],
-                                         "exists": False, "machine": engine.this_machine()})
+        self.assertEqual(config.load(), {"config": {"version": 1, "repoUrl": "", "vaults": []}, "problems": [],
+                                         "exists": False, "machine": config.this_machine()})
 
     def test_broken_json_is_an_error_not_an_empty_config(self):
         self.write(".config/file-vault/config.json", '{"repoUrl": "https://github.com/a/b",\n  "vaults": [}')
-        with self.assertRaisesRegex(engine.Failure, "line 2, column"):
-            engine.load()
+        with self.assertRaisesRegex(common.Failure, "line 2, column"):
+            config.load()
 
     def test_invalid_entries_are_reported(self):
         self.write(".config/file-vault/config.json", json.dumps({
@@ -112,7 +163,7 @@ class Config(Home):
             "vaults": [{"name": "omarchy", "sources": []},
                        {"name": "2026-10-01-ok", "sources": ["/etc/hosts", "relative"]},
                        {"name": "2026-10-01-ok", "sources": []}]}))
-        out = engine.load()
+        out = config.load()
         self.assertEqual([v["name"] for v in out["config"]["vaults"]], ["2026-10-01-ok"])
         self.assertEqual(out["config"]["vaults"][0]["sources"], ["/etc/hosts"])
         text = "\n".join(out["problems"])
@@ -121,29 +172,29 @@ class Config(Home):
             self.assertIn(expected, text)
 
     def test_save_then_load(self):
-        engine.save(json.dumps({"repoUrl": "https://github.com/chyld/backups",
+        config.save(json.dumps({"repoUrl": "https://github.com/chyld/backups",
                                 "vaults": [{"name": "2026-10-01-omarchy", "sources": ["/etc/hosts"]}]}).encode())
         path = self.path(".config", "file-vault", "config.json")
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
-        self.assertEqual(engine.load()["config"]["vaults"][0]["sources"], ["/etc/hosts"])
+        self.assertEqual(config.load()["config"]["vaults"][0]["sources"], ["/etc/hosts"])
         self.assertEqual([n for n in os.listdir(os.path.dirname(path)) if n.endswith(".tmp")], [])
 
     def test_save_rejects_garbage(self):
-        with self.assertRaises(engine.Failure):
-            engine.save(b"not json")
+        with self.assertRaises(common.Failure):
+            config.save(b"not json")
 
     def test_symlinked_config_is_refused(self):
         os.makedirs(self.path(".config", "file-vault"))
         self.write("elsewhere.json", "{}")
         os.symlink(self.path("elsewhere.json"), self.path(".config", "file-vault", "config.json"))
         with self.assertRaises(OSError):
-            engine.load()
+            config.load()
 
 
 class Copying(Home):
     def copy(self, *sources):
         dest = self.path("out")
-        c = engine.mirror(dest, engine.plan(list(sources)))
+        c = plan.mirror(dest, plan.plan(list(sources)))
         return c, dest
 
     def test_unchanged_files_are_not_copied_again(self):
@@ -170,7 +221,7 @@ class Copying(Home):
         os.unlink(self.path("proj", "sub", "b.txt"))
         self.write("proj/big.bin")
         with open(self.path("proj", "big.bin"), "wb") as f:
-            f.truncate(engine.LIMIT_BYTES + 1)   # now skipped, so removed too
+            f.truncate(common.LIMIT_BYTES + 1)   # now skipped, so removed too
         self.copy(self.path("proj"))
         self.assertFalse(os.path.exists(dest + rc))
         self.assertTrue(os.path.exists(dest + self.path("proj", "a.txt")))
@@ -204,7 +255,7 @@ class Copying(Home):
         os.symlink("run.sh", self.path("proj", "link"))
         os.mkfifo(self.path("proj", "pipe"))
         with open(self.path("proj", "big.bin"), "wb") as f:
-            f.truncate(engine.LIMIT_BYTES + 1)
+            f.truncate(common.LIMIT_BYTES + 1)
         c, dest = self.copy(rc, self.path("proj"), self.path("missing"))
 
         with open(dest + rc) as f:
@@ -247,26 +298,51 @@ class Copying(Home):
         rc = self.write(".bashrc", "rc")
         self.write("proj/.git/config", "x")
         os.symlink(".bashrc", self.path("link"))
-        c = engine.plan([rc, self.path("proj"), self.path("link")])
+        c = plan.plan([rc, self.path("proj"), self.path("link")])
         self.assertEqual([(p, size, followed) for p, size, _, followed in c.entries],
                          [(rc, 2, False), (self.path("link"), 2, True)])
         self.assertEqual(sorted(os.listdir(self.home)), [".bashrc", "link", "proj"])
-        text = engine.listing("2026-10-01-omarchy", [rc, self.path("proj")])
+        text = views.listing("2026-10-01-omarchy", [rc, self.path("proj")])
         self.assertIn(rc, text)
         self.assertIn(".git: a git repository's own folder", text)
 
     def test_dry_run_reports_limits_instead_of_failing(self):
         for i in range(3):
             self.write(f"many/{i}")
-        with mock.patch.object(engine, "MAX_FILES", 2):
-            c = engine.plan([self.path("many")])
+        with mock.patch.object(common, "MAX_FILES", 2):
+            c = plan.plan([self.path("many")])
         self.assertIn("More than 2 files", c.over)
+
+    def test_secrets_are_skipped_unless_included(self):
+        key = self.write(".ssh/id_ed25519", "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n")
+        pub = self.write(".ssh/id_ed25519.pub", "ssh-ed25519 AAAA me")
+        hidden_key = self.write("certs/server.pem", "-----BEGIN RSA PRIVATE KEY-----\nabc\n")
+        cert = self.write("certs/ca.pem", "-----BEGIN CERTIFICATE-----\nabc\n")
+        env = self.write("app/.env", "TOKEN=x")
+        env_local = self.write("app/.env.local", "TOKEN=x")
+        example = self.write("app/.env.example", "TOKEN=")
+        gh = self.write(".config/gh/hosts.yml", "oauth_token: x")
+        c = plan.plan([self.path(".ssh"), self.path("certs"), self.path("app"), gh])
+        copied = sorted(e[0] for e in c.entries)
+        self.assertEqual(copied, sorted([pub, cert, example]))
+        reasons = "\n".join(c.skipped)
+        for path in [key, hidden_key, env, env_local, gh]:
+            self.assertIn(path + ": looks like a secret", reasons)
+        everything = plan.plan([self.path(".ssh"), self.path("certs"), self.path("app"), gh], include_secrets=True)
+        self.assertEqual(len(everything.entries), 8)
+        self.assertEqual(everything.skipped, [])
+
+    def test_a_picked_secret_is_skipped_too(self):
+        key = self.write(".ssh/id_rsa", "-----BEGIN RSA PRIVATE KEY-----")
+        c = plan.plan([key])
+        self.assertEqual((c.entries, c.files), ([], 0))
+        self.assertIn("looks like a secret", c.skipped[0])
 
     def test_file_limit(self):
         for i in range(3):
             self.write(f"many/{i}")
-        with mock.patch.object(engine, "MAX_FILES", 2):
-            with self.assertRaises(engine.Failure):
+        with mock.patch.object(common, "MAX_FILES", 2):
+            with self.assertRaises(common.Failure):
                 self.copy(self.path("many"))
 
 
@@ -283,12 +359,12 @@ class Sync(Home):
         self.remote = self.path("remote.git")
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", self.remote], check=True)
         # The local bare repository plays github.com/chyld/backups.
-        real = engine.repo_url
-        p = mock.patch.object(engine, "repo_url", side_effect=lambda v: URL if v in (URL, self.remote) else real(v))
+        real = common.repo_url
+        p = mock.patch.object(common, "repo_url", side_effect=lambda v: URL if v in (URL, self.remote) else real(v))
         p.start()
         self.addCleanup(p.stop)
-        real_run = engine.run
-        p = mock.patch.object(engine, "run", side_effect=lambda argv, timeout=engine.LOCAL:
+        real_run = proc.run
+        p = mock.patch.object(proc, "run", side_effect=lambda argv, timeout=proc.LOCAL:
                               real_run([self.remote if a == URL else a for a in argv], timeout))
         p.start()
         self.addCleanup(p.stop)
@@ -300,17 +376,17 @@ class Sync(Home):
         return [json.loads(line) for line in out.getvalue().splitlines()]
 
     def copy(self, vault, *sources):
-        events = self.events(engine.copy, URL, vault, list(sources))
+        events = self.events(sync.copy, URL, vault, list(sources))
         self.assertEqual(events[-1]["event"], "copied", events)
         return events[-1]
 
     def push(self):
-        events = self.events(engine.push, URL)
+        events = self.events(sync.push, URL)
         self.assertEqual(events[-1]["event"], "pushed", events)
         return events[-1]
 
     def status(self):
-        events = self.events(engine.status, URL)
+        events = self.events(sync.status, URL)
         self.assertEqual(events[-1]["event"], "status", events)
         return events[-1]
 
@@ -350,7 +426,10 @@ class Sync(Home):
         pushed = self.push()
         self.assertEqual(pushed["vaults"], ["2026-10-01-omarchy"])
         self.assertEqual(self.remote_files(), [f"2026-10-01-omarchy/{rel}/.bashrc"])
-        self.assertEqual(self.status(), {"event": "status", "cloned": True, "pending": {}, "unpushed": []})
+        when = int(subprocess.run(["git", "-C", self.remote, "log", "-1", "--format=%ct", "main"],
+                                  capture_output=True, text=True).stdout)
+        self.assertEqual(self.status(), {"event": "status", "cloned": True, "pending": {}, "unpushed": [],
+                                         "pushedAt": {"2026-10-01-omarchy": when}})
 
     def test_push_commits_each_vault_separately(self):
         self.copy("2026-10-01-a", self.write("a.txt", "a"))
@@ -378,12 +457,49 @@ class Sync(Home):
         self.assertEqual(out, "mine, newer")
 
     def test_status_before_the_first_clone(self):
-        self.assertEqual(self.status(), {"event": "status", "cloned": False, "pending": {}, "unpushed": []})
+        self.assertEqual(self.status(), {"event": "status", "cloned": False, "pending": {}, "unpushed": [],
+                                         "pushedAt": {}})
+
+    def index(self):
+        repo = places.mirror_dir(URL)
+        return subprocess.run(["git", "-C", repo, "diff", "--cached", "--name-only"],
+                              capture_output=True, text=True, check=True).stdout
+
+    def test_status_never_stages_anything(self):
+        self.copy("2026-10-01-a", self.write("a.txt", "a"))
+        before = self.index()
+        # Something changed in the local copy by hand, outside a copy.
+        with open(os.path.join(places.mirror_dir(URL), "2026-10-01-a", "stray"), "w") as f:
+            f.write("x")
+        self.assertEqual(self.status()["pending"], {"2026-10-01-a": 2})
+        self.assertEqual(self.index(), before)
+        self.diff_text("2026-10-01-a")
+        self.assertEqual(self.index(), before)
+
+    def test_push_times_come_from_git_and_are_cached(self):
+        self.sync("2026-10-01-a", self.write("a.txt", "a"))
+        self.sync("2026-10-01-b", self.write("b.txt", "b"))
+        first = self.status()["pushedAt"]
+        self.assertEqual(sorted(first), ["2026-10-01-a", "2026-10-01-b"])
+        cache = os.path.join(places.mirror_dir(URL), ".git", sync.PUSHED_CACHE)
+        self.assertTrue(os.path.exists(cache))
+        # With GitHub's branch where it was, no git log runs again.
+        seen = []
+        real = proc.run
+
+        def run(argv, timeout=proc.LOCAL):
+            seen.append(argv)
+            return real(argv, timeout)
+
+        with mock.patch.object(proc, "run", side_effect=run):
+            self.assertEqual(self.status()["pushedAt"], first)
+        self.assertEqual([a for a in seen if "log" in a and "--format=%ct" in a], [])
+        self.assertTrue(seen)
 
     def diff_text(self, vault):
         out = io.StringIO()
         with redirect_stdout(out):
-            engine.diff(URL, vault)
+            views.diff(URL, vault)
         return re.sub(r"\x1b\[[0-9;]*m", "", out.getvalue())   # without colors
 
     def test_diff_lists_files_only_then_the_last_push(self):
@@ -411,7 +527,7 @@ class Sync(Home):
         unless asked for."""
         out = subprocess.run(["git", "-C", self.remote, "ls-tree", "-r", "--name-only", "main"],
                              capture_output=True, text=True, check=True).stdout
-        return sorted(p for p in out.split() if definitions or not p.endswith("/" + engine.DEFINITION))
+        return sorted(p for p in out.split() if definitions or not p.endswith("/" + config.DEFINITION))
 
     def test_first_sync_into_empty_repo_then_resync(self):
         rc = self.write(".bashrc", "one")
@@ -457,7 +573,7 @@ class Sync(Home):
         self.sync("2026-10-01-omarchy", rc)
         other = self.path("other")
         subprocess.run(["git", "clone", "-q", self.remote, other], check=True)
-        real_step = engine.step
+        real_step = sync.step
         raced = []
 
         def step(text):
@@ -472,7 +588,7 @@ class Sync(Home):
             real_step(text)
 
         self.write(".bashrc", "two")
-        with mock.patch.object(engine, "step", side_effect=step):
+        with mock.patch.object(sync, "step", side_effect=step):
             self.sync("2026-10-01-omarchy", rc)
         self.assertIn("NOTE", self.remote_files())
         out = subprocess.run(["git", "-C", self.remote, "show", f"main:2026-10-01-omarchy/{self.home.lstrip('/')}/.bashrc"],
@@ -482,7 +598,7 @@ class Sync(Home):
     def connect(self):
         out = io.StringIO()
         with redirect_stdout(out):
-            engine.connect(URL)
+            sync.connect(URL)
         events = [json.loads(line) for line in out.getvalue().splitlines()]
         self.assertEqual(events[-1]["event"], "connected", events)
         vaults = [{k: v for k, v in e.items() if k != "event"} for e in events if e["event"] == "vault"]
@@ -492,7 +608,7 @@ class Sync(Home):
     def test_connect_to_an_empty_repository_clones_it(self):
         done = self.connect()
         self.assertEqual((done["branch"], done["empty"], done["vaults"]), ("main", True, []))
-        self.assertTrue(os.path.isdir(os.path.join(engine.mirror_dir(URL), ".git")))
+        self.assertTrue(os.path.isdir(os.path.join(places.mirror_dir(URL), ".git")))
         # The dry-run push sent nothing.
         refs = subprocess.run(["git", "-C", self.remote, "for-each-ref"], capture_output=True, text=True).stdout
         self.assertEqual(refs, "")
@@ -505,7 +621,7 @@ class Sync(Home):
         pushed = int(subprocess.run(["git", "-C", self.remote, "log", "-1", "--format=%ct", "main"],
                                     capture_output=True, text=True).stdout)
         self.assertEqual((done["empty"], done["vaults"]), (False, [
-            {"name": "2026-10-01-omarchy", "defined": True, "sources": [rc], "machine": engine.this_machine(),
+            {"name": "2026-10-01-omarchy", "defined": True, "sources": [rc], "machine": config.this_machine(),
              "pushedAt": pushed}]))
         branches = subprocess.run(["git", "-C", self.remote, "branch", "--format=%(refname:short)"],
                                   capture_output=True, text=True).stdout.split()
@@ -514,10 +630,10 @@ class Sync(Home):
     def test_copy_writes_the_vaults_definition(self):
         rc = self.write(".bashrc", "x")
         self.sync("2026-10-01-omarchy", rc)
-        self.assertIn(f"2026-10-01-omarchy/{engine.DEFINITION}", self.remote_files(definitions=True))
-        out = subprocess.run(["git", "-C", self.remote, "show", f"main:2026-10-01-omarchy/{engine.DEFINITION}"],
+        self.assertIn(f"2026-10-01-omarchy/{config.DEFINITION}", self.remote_files(definitions=True))
+        out = subprocess.run(["git", "-C", self.remote, "show", f"main:2026-10-01-omarchy/{config.DEFINITION}"],
                              capture_output=True, check=True).stdout
-        self.assertEqual(engine.read_definition(out), {"sources": [rc], "machine": engine.this_machine()})
+        self.assertEqual(config.read_definition(out), {"sources": [rc], "machine": config.this_machine()})
 
     def test_a_folder_without_a_definition_is_listed_as_undefined(self):
         other = self.other_machine()
@@ -528,7 +644,7 @@ class Sync(Home):
         self.assertGreater(done["vaults"][0]["pushedAt"], 0)
 
     def as_other_machine(self):
-        return mock.patch.object(engine, "this_machine", return_value={"id": "0123456789abcdef", "name": "laptop"})
+        return mock.patch.object(config, "this_machine", return_value={"id": "0123456789abcdef", "name": "laptop"})
 
     def test_a_vault_from_another_machine_is_not_copied_over_without_adopting(self):
         rel = self.home.lstrip("/")
@@ -545,9 +661,9 @@ class Sync(Home):
         events = self.events(engine.main, ["copy", "--adopt", URL, "2026-10-01-laptop", "--", rc])
         self.assertEqual(events[-1]["event"], "copied", events)
         self.push()
-        out = subprocess.run(["git", "-C", self.remote, "show", f"main:2026-10-01-laptop/{engine.DEFINITION}"],
+        out = subprocess.run(["git", "-C", self.remote, "show", f"main:2026-10-01-laptop/{config.DEFINITION}"],
                              capture_output=True, check=True).stdout
-        self.assertEqual(engine.read_definition(out)["machine"], engine.this_machine())
+        self.assertEqual(config.read_definition(out)["machine"], config.this_machine())
 
     def test_a_vault_without_a_definition_can_be_copied(self):
         other = self.other_machine()
@@ -556,13 +672,13 @@ class Sync(Home):
 
     def test_nothing_is_left_in_the_work_tree_by_copying(self):
         self.copy("2026-10-01-a", self.write("a.txt", "a"))
-        repo = engine.mirror_dir(URL)
+        repo = places.mirror_dir(URL)
         self.assertEqual(sorted(os.listdir(repo)), [".git", "2026-10-01-a"])
-        self.assertEqual(os.listdir(engine.work_dir()), [])
+        self.assertEqual(os.listdir(places.work_dir()), [])
 
     def test_a_stale_index_lock_is_cleared(self):
         self.copy("2026-10-01-a", self.write("a.txt", "a"))
-        lock = os.path.join(engine.mirror_dir(URL), ".git", "index.lock")
+        lock = os.path.join(places.mirror_dir(URL), ".git", "index.lock")
         open(lock, "w").close()
         os.utime(lock, (1, 1))                          # left by a git killed long ago
         self.copy("2026-10-01-a", self.write("a.txt", "b"))
@@ -570,26 +686,26 @@ class Sync(Home):
 
     def test_a_fresh_index_lock_is_left_alone(self):
         self.copy("2026-10-01-a", self.write("a.txt", "a"))
-        lock = os.path.join(engine.mirror_dir(URL), ".git", "index.lock")
+        lock = os.path.join(places.mirror_dir(URL), ".git", "index.lock")
         open(lock, "w").close()                         # a git may be using it right now
         events = self.events(engine.main, ["copy", URL, "2026-10-01-a", "--", self.path("a.txt")])
         self.assertEqual(events[-1]["event"], "error")
         self.assertTrue(os.path.exists(lock))
 
     def test_the_data_folder_is_made_private(self):
-        os.makedirs(engine.data_dir(), mode=0o755)
-        os.chmod(engine.data_dir(), 0o755)
+        os.makedirs(places.data_dir(), mode=0o755)
+        os.chmod(places.data_dir(), 0o755)
         self.copy("2026-10-01-a", self.write("a.txt", "a"))
-        self.assertEqual(os.stat(engine.data_dir()).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(places.data_dir()).st_mode & 0o777, 0o700)
 
     def test_commands_wait_for_each_other(self):
-        with engine.exclusive(), mock.patch.object(engine, "LOCK_WAIT", 0.3):
+        with places.exclusive(), mock.patch.object(places, "LOCK_WAIT", 0.3):
             events = self.events(engine.main, ["status", URL])
         self.assertEqual(events[-1]["event"], "error")
         self.assertIn("still running", events[-1]["message"])
 
     def test_a_clone_left_by_a_killed_run_is_removed(self):
-        parent = os.path.dirname(engine.mirror_dir(URL))
+        parent = os.path.dirname(places.mirror_dir(URL))
         os.makedirs(os.path.join(parent, ".backups.dead.clone", "x"))
         self.connect()
         self.assertEqual(sorted(os.listdir(parent)), ["backups"])
@@ -611,38 +727,38 @@ class Sync(Home):
         self.assertEqual(branches, ["trunk"])
 
     def test_an_unexpected_error_is_reported_not_a_traceback(self):
-        with mock.patch.object(engine, "plan", side_effect=RecursionError("too deep")):
+        with mock.patch.object(plan, "plan", side_effect=RecursionError("too deep")):
             events = self.events(engine.main, ["copy", URL, "2026-10-01-a", "--", self.path("x")])
         self.assertEqual(events[-1], {"event": "error", "message": "Unexpected RecursionError: too deep"})
 
     def test_connect_reports_a_missing_repository(self):
         subprocess.run(["rm", "-rf", self.remote], check=True)
-        with self.assertRaises(engine.Failure), redirect_stdout(io.StringIO()):
-            engine.connect(URL)
+        with self.assertRaises(common.Failure), redirect_stdout(io.StringIO()):
+            sync.connect(URL)
 
     def test_mirror_for_another_repository_is_refused(self):
-        repo = engine.mirror_dir(URL)
+        repo = places.mirror_dir(URL)
         os.makedirs(os.path.dirname(repo))
         subprocess.run(["git", "clone", "-q", self.remote, repo], check=True)
         subprocess.run(["git", "-C", repo, "remote", "set-url", "origin", "https://github.com/x/y"], check=True)
-        with self.assertRaises(engine.Failure):
-            engine.copy(URL, "2026-10-01-omarchy", [])
+        with self.assertRaises(common.Failure):
+            sync.copy(URL, "2026-10-01-omarchy", [])
 
 
 class Machines(Home):
     def test_the_machine_id_is_a_hash_not_the_raw_id(self):
-        me = engine.this_machine()
+        me = config.this_machine()
         with open("/etc/machine-id") as f:
             raw = f.read().strip()
         self.assertRegex(me["id"], r"^[0-9a-f]{16}$")
         self.assertNotIn(me["id"], raw)
 
     def test_definitions_are_checked(self):
-        d = engine.read_definition(json.dumps({"sources": ["/etc/hosts", "rel", 3],
+        d = config.read_definition(json.dumps({"sources": ["/etc/hosts", "rel", 3],
                                                "machine": {"id": "not-hex", "name": "a\nb"}}))
         self.assertEqual(d, {"sources": ["/etc/hosts"], "machine": {"id": "", "name": "ab"}})
-        for bad in [b"", b"nope", b"[]", b"x" * (engine.DEFINITION_MAX + 1)]:
-            self.assertIsNone(engine.read_definition(bad))
+        for bad in [b"", b"nope", b"[]", b"x" * (config.DEFINITION_MAX + 1)]:
+            self.assertIsNone(config.read_definition(bad))
 
 
 class Reset(Home):
@@ -680,17 +796,35 @@ class Reset(Home):
 class Main(Home):
     def test_folder_before_and_after_the_first_clone(self):
         self.assertEqual(engine.main(["folder", URL]), 4)
-        os.makedirs(os.path.join(engine.mirror_dir(URL), ".git"))
+        os.makedirs(os.path.join(places.mirror_dir(URL), ".git"))
         out = io.StringIO()
         with redirect_stdout(out):
             self.assertEqual(engine.main(["folder", URL]), 0)
-        self.assertEqual(out.getvalue().strip(), engine.mirror_dir(URL))
+        self.assertEqual(out.getvalue().strip(), places.mirror_dir(URL))
         self.assertEqual(engine.main(["folder", "https://gitlab.com/a/b"]), 4)
 
     def test_list_rejects_bad_arguments(self):
         with mock.patch("sys.stderr", io.StringIO()):
             self.assertEqual(engine.main(["list", "bad", "--", "/etc"]), 2)
             self.assertEqual(engine.main(["list", "2026-10-01-a", "--", "rel"]), 2)
+
+    def test_flags_come_before_the_repository_in_any_order(self):
+        seen = []
+        with mock.patch.object(sync, "copy", side_effect=lambda *a: seen.append(a)), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(engine.main(["copy", "--secrets", "--adopt", URL, "2026-10-01-a", "--", "/etc/hosts"]), 0)
+            self.assertEqual(engine.main(["copy", URL, "2026-10-01-a", "--", "/etc/hosts"]), 0)
+            self.assertEqual(engine.main(["copy", URL, "--adopt", "2026-10-01-a", "--", "/x"]), 2)
+        self.assertEqual(seen, [(URL, "2026-10-01-a", ["/etc/hosts"], True, True),
+                                (URL, "2026-10-01-a", ["/etc/hosts"], False, False)])
+
+    def test_list_takes_the_secrets_flag(self):
+        key = self.write(".ssh/id_rsa", "-----BEGIN RSA PRIVATE KEY-----")
+        for flags, shown in (([], False), (["--secrets"], True)):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(engine.main(["list", *flags, "2026-10-01-a", "--", key]), 0)
+            self.assertEqual(f"  {key}  " in out.getvalue(), shown, flags)
 
     def test_invalid_arguments_report_an_error(self):
         out = io.StringIO()
