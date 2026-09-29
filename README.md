@@ -1,4 +1,15 @@
-# File Vault
+<p align="center">
+  <img src="icon.svg" alt="File Vault" width="128">
+</p>
+
+<h1 align="center">File Vault</h1>
+
+<p align="center">
+  <b>Back up the files that matter to GitHub, right from the Omarchy bar.</b><br>
+  Dated vaults · full paths kept · rsync under the hood · never force-pushes
+</p>
+
+---
 
 Back up hand-picked files and folders to one GitHub repository, from the
 Omarchy bar.
