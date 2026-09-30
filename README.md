@@ -55,6 +55,17 @@ omarchy plugin add https://github.com/chyld/omarchy-rsync-github-plugin --enable
    like, then press **2 · Push to GitHub**. A vault always goes to the
    repository it is linked to.
 
+### Knowing when to sync
+
+Every hour, and each time you open the popup, File Vault checks each of
+this machine's vaults for files that changed since its last copy: new,
+edited or deleted files, and picked paths added or removed. It only
+flags them: the bar mark's core lights up, the vault shows **N files to
+copy**, and Copy to repo is highlighted. It never copies or pushes by
+itself. The check is local and read-only (no git, no network); a file only
+touched, or saved again unchanged, doesn't count. Copied changes not
+pushed yet light the core too, and show as **to push**.
+
 Connecting another repository switches the vault list to that repository's
 vaults; the others are kept, and come back when you connect their
 repository again. Vaults made before any repository was connected are linked
@@ -95,7 +106,7 @@ can use (`gh auth login`, then `gh auth setup-git`).
 | --- | --- |
 | `~/.config/file-vault/config.json` | The repository URL, your vaults and what each holds (0600). What waits to be pushed, and when each vault was last pushed, are read from git each time, never stored here. |
 | `~/.local/share/file-vault/repos/<owner>/<repo>` | The local copy of the repository. It belongs to the plugin: File Vault only counts changes made by **1 · Copy to repo**, so don't edit files in it by hand. |
-| GitHub | Only Connect and Push touch the network. |
+| GitHub | Only Connect and Push touch the network. The hourly check doesn't. |
 
 To remove everything File Vault keeps on this machine, use **Delete local
 data** in the popup; to uninstall the plugin as well,
@@ -151,6 +162,11 @@ credentials are pushed unencrypted.
 - The same validation is written twice, in `Safe.js` for the shell and in
   `fv/common.py`. `tests/vectors.json` holds the cases both must agree on,
   and both test suites run them.
+- Check is read-only too: it plans each of this machine's vaults as Copy
+  would, and compares with the vault folder (size and time, then the bytes
+  when only the time differs, and the execute bit, which git keeps). It
+  reads the vaults from `config.json` and runs no git. The service runs it
+  hourly, when the popup opens and after a load, never during a job.
 - Status is read-only: it reads the index and history, and never stages
   anything. When each vault was last pushed comes from `git log`, cached in
   the local copy's `.git` folder until GitHub's branch moves.
@@ -165,7 +181,7 @@ credentials are pushed unencrypted.
   in a repository's work tree, so a killed run can't leave anything to be
   committed.
 - Out of scope: restoring a vault's files onto a machine. Deferred: removing a vault's folder from GitHub,
-  scheduled syncs.
+  scheduled syncs (the hourly check only flags what needs syncing).
 
 ## Tests
 

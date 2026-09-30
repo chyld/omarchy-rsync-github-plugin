@@ -64,6 +64,13 @@ function status(script, url) {
   return repo ? [PYTHON, "-I", "-S", script, "status", repo] : null
 }
 
+// Per vault of this machine, the files changed since its last copy; local
+// and read-only.
+function check(script, url) {
+  var repo = Safe.repoUrl(url)
+  return repo ? [PYTHON, "-I", "-S", script, "check", repo] : null
+}
+
 // The local copy of the repository's path on stdout, or exit 4 before the
 // first sync.
 function folder(script, url) {

@@ -346,6 +346,42 @@ class Copying(Home):
                 self.copy(self.path("many"))
 
 
+    def test_compare_counts_what_a_copy_would_change(self):
+        rc = self.write(".bashrc", "one")
+        conf = self.write(".config/app/app.conf", "a")
+        os.symlink("app.conf", self.path(".config/app/link"))
+        sources = [rc, self.path(".config")]
+        dest = self.path("out")
+        self.assertEqual(plan.compare(dest, plan.plan(sources)), 3)      # never copied
+        self.copy(*sources)
+        self.assertEqual(plan.compare(dest, plan.plan(sources)), 0)
+        self.write(".bashrc", "two")                                     # same size, new time
+        os.unlink(conf)
+        os.unlink(self.path(".config/app/link"))
+        os.symlink("elsewhere", self.path(".config/app/link"))
+        self.write(".config/app/new", "n")
+        self.assertEqual(plan.compare(dest, plan.plan(sources)), 4)      # changed, removed, relinked, added
+        self.copy(*sources)
+        self.assertEqual(plan.compare(dest, plan.plan(sources)), 0)
+
+    def test_compare_ignores_a_touch_but_not_an_execute_bit(self):
+        rc = self.write(".bashrc", "one")
+        dest = self.copy(rc)[1]
+        os.utime(rc, (5, 5))
+        self.assertEqual(plan.compare(dest, plan.plan([rc])), 0)
+        os.chmod(rc, 0o755)
+        self.assertEqual(plan.compare(dest, plan.plan([rc])), 1)
+
+    def test_compare_writes_nothing_and_reports_limits(self):
+        for i in range(3):
+            self.write(f"many/{i}")
+        dest = self.path("out")
+        self.assertEqual(plan.compare(dest, plan.plan([self.path("many")])), 3)
+        self.assertFalse(os.path.lexists(dest))
+        with mock.patch.object(common, "MAX_FILES", 2), self.assertRaises(common.Failure):
+            plan.compare(dest, plan.plan([self.path("many")]))
+
+
 class Sync(Home):
     """sync() against a local bare repository standing in for GitHub."""
 
@@ -743,6 +779,59 @@ class Sync(Home):
         subprocess.run(["git", "-C", repo, "remote", "set-url", "origin", "https://github.com/x/y"], check=True)
         with self.assertRaises(common.Failure):
             sync.copy(URL, "2026-10-01-omarchy", [])
+
+
+    def configure(self, *vaults, repo=URL):
+        """config.json with these vaults, linked to `repo`: (name, sources, machine) each."""
+        page = common.repo_page(repo)
+        config.save(json.dumps({"repoUrl": page, "vaults": [
+            {"name": n, "repoUrl": page, "sources": s, "machine": m} for n, s, m in vaults]}).encode())
+
+    def check(self):
+        events = self.events(sync.check, URL)
+        self.assertEqual(events[-1]["event"], "checked", events)
+        return events[-1]
+
+    def test_check_flags_files_changed_since_the_last_copy(self):
+        me = config.this_machine()["id"]
+        rc = self.write(".bashrc", "one")
+        self.configure(("2026-10-01-a", [rc], me), ("2026-10-01-b", [self.write("b.txt", "b")], ""))
+        self.assertEqual(self.check()["stale"], {"2026-10-01-a": 1, "2026-10-01-b": 1})   # never copied
+        self.copy("2026-10-01-a", rc)
+        self.assertEqual(self.check(), {"event": "checked", "stale": {"2026-10-01-b": 1}, "failed": {}})
+        self.write(".bashrc", "two, longer")
+        self.assertEqual(self.check()["stale"], {"2026-10-01-a": 1, "2026-10-01-b": 1})
+        # Copied but not pushed is status's business, not check's.
+        self.copy("2026-10-01-a", rc)
+        self.assertNotIn("2026-10-01-a", self.check()["stale"])
+        self.assertEqual(self.status()["pending"], {"2026-10-01-a": 2})   # the file and the definition
+
+    def test_check_counts_a_changed_pick_and_stays_read_only(self):
+        me = config.this_machine()["id"]
+        rc, other = self.write(".bashrc", "one"), self.write("other.txt", "o")
+        self.configure(("2026-10-01-a", [rc], me))
+        self.sync("2026-10-01-a", rc)
+        before = self.index()
+        self.configure(("2026-10-01-a", [rc, other], me))
+        self.assertEqual(self.check()["stale"], {"2026-10-01-a": 2})      # the new file and the definition
+        self.assertEqual(self.index(), before)
+        self.assertEqual(self.status()["pending"], {})
+
+    def test_check_skips_other_machines_and_repositories(self):
+        rc = self.write(".bashrc", "one")
+        self.configure(("2026-10-01-laptop", [rc], "0123456789abcdef"))
+        self.assertEqual(self.check()["stale"], {})
+        self.configure(("2026-10-01-a", [rc], ""), repo="https://github.com/chyld/elsewhere")
+        self.assertEqual(self.check()["stale"], {})
+
+    def test_check_reports_a_vault_it_cant_check(self):
+        for i in range(3):
+            self.write(f"many/{i}")
+        self.configure(("2026-10-01-a", [self.path("many")], ""))
+        with mock.patch.object(common, "MAX_FILES", 2):
+            done = self.check()
+        self.assertEqual(done["stale"], {})
+        self.assertIn("More than 2 files", done["failed"]["2026-10-01-a"])
 
 
 class Machines(Home):

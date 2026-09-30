@@ -120,6 +120,11 @@ test("engineEvent checks each field", () => {
     { event: "status", cloned: true, pending: { "2026-10-01-a": 3 }, unpushed: ["2026-10-01-b"],
       pushedAt: { "2026-10-01-a": 1790000000 } })
   assert.deepEqual(plainJson(Safe.engineEvent('{"event":"status","pushedAt":[1]}')).pushedAt, {})
+  assert.deepEqual(plainJson(Safe.engineEvent(JSON.stringify({ event: "checked",
+    stale: { "2026-10-01-a": 2, "bad": 1, "2026-10-01-b": 0 }, failed: { "2026-10-01-c": "too\nbig", "x": "y", "2026-10-01-d": 5 } }))),
+    { event: "checked", stale: { "2026-10-01-a": 2 }, failed: { "2026-10-01-c": "toobig" } })
+  assert.deepEqual(plainJson(Safe.engineEvent('{"event":"checked","stale":[1],"failed":null}')),
+                   { event: "checked", stale: {}, failed: {} })
   assert.equal(Safe.engineEvent("nope"), null)
   assert.equal(Safe.engineEvent('{"event":"other"}'), null)
 })
@@ -174,6 +179,9 @@ test("copy, push, status and diff argv are built only from valid values", () => 
   assert.deepEqual(plainJson(Commands.push("/p/engine.py", "https://github.com/a/b")),
                    ["/usr/bin/python3", "-I", "-S", "/p/engine.py", "push", "https://github.com/a/b.git"])
   assert.equal(Commands.status("/p/engine.py", "x"), null)
+  assert.deepEqual(plainJson(Commands.check("/p/engine.py", "https://github.com/a/b")),
+                   ["/usr/bin/python3", "-I", "-S", "/p/engine.py", "check", "https://github.com/a/b.git"])
+  assert.equal(Commands.check("/p/engine.py", "x"), null)
   assert.deepEqual(plainJson(Commands.diff("", "/p/engine.py", "https://github.com/a/b", "2026-10-01-a")),
     ["/usr/share/omarchy/bin/omarchy-launch-tui", "--app-id=org.omarchy.file-vault",
      "/usr/bin/python3", "-I", "-S", "/p/engine.py", "diff", "https://github.com/a/b.git", "2026-10-01-a"])

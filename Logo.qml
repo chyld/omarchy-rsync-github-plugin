@@ -6,7 +6,8 @@ import qs.Commons
 //
 // The phase changes the mark rather than swapping icons:
 //   idle     all in the bar's colour
-//   waiting  the core in the accent: copied changes wait to be pushed
+//   waiting  the core in the accent: files changed since a vault's last
+//            copy, or copied changes waiting to be pushed
 //   busy     the dial ring turns, in the accent: connecting, copying, pushing
 //   error    the core in the urgent colour
 //

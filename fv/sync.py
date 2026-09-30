@@ -1,4 +1,4 @@
-"""connect, copy, push and status: everything done to the local copy of the
+"""connect, copy, push, status and check: everything done to the local copy of the
 repository (~/.local/share/file-vault/repos/<owner>/<repo>), which belongs
 to this plugin. Each prints JSON lines on stdout and nothing else."""
 
@@ -334,3 +334,51 @@ def status(url):
     remote = f"refs/remotes/origin/{branch_of(git)}"
     emit({"event": "status", "cloned": True, "pending": pending, "unpushed": unpushed_vaults(git, remote),
           "pushedAt": pushed_times(git, remote)})
+
+
+# ------------------------------------------------------------ check
+
+def check(url):
+    """Per vault of this machine linked to the repository, as config.json
+    has it: how many files a copy would add, change or remove, because they
+    changed since the last copy. Reads the picked files and the vault
+    folders; writes nothing, runs no git, and never touches the network.
+    A vault from another machine is left out: this machine doesn't copy
+    into it."""
+    page = common.repo_page(url)
+    me = config.this_machine()
+    repo = places.mirror_dir(url)
+    stale, failed = {}, {}
+    for v in config.load()["config"]["vaults"]:
+        name = v["name"]
+        if v["repoUrl"] != page or (v["machine"] and me["id"] and v["machine"] != me["id"]):
+            continue
+        step(f"Checking {name}")
+        try:
+            n = changes(os.path.join(repo, name), v, me)
+        except common.Failure as e:
+            failed[name] = common.plain(str(e), 160)
+            continue
+        except OSError as e:
+            failed[name] = common.plain(f"{e.filename or ''}: {e.strerror or e}", 160)
+            continue
+        if n:
+            stale[name] = n
+    emit({"event": "checked", "stale": stale, "failed": failed})
+
+
+def changes(dest, vault, me):
+    """What a copy of `vault` into `dest` would change: its files, and its
+    definition when the picked paths or the machine differ from the last
+    copy's. A vault never copied counts its files only."""
+    planned = plan.plan(vault["sources"], vault["includeSecrets"])
+    n = plan.compare(dest, planned, keep=[config.DEFINITION])
+    if os.path.isdir(dest) and not os.path.islink(dest):
+        try:
+            with open(os.path.join(dest, config.DEFINITION), "rb") as f:
+                existing = config.read_definition(f.read(config.DEFINITION_MAX + 1))
+        except OSError:
+            existing = None
+        if existing != {"sources": vault["sources"], "machine": me}:
+            n += 1
+    return n

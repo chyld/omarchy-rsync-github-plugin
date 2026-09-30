@@ -5,7 +5,7 @@
     config   config.json, this machine, and vault definitions
     proc     running git and rsync: deadlines, output caps, readable errors
     plan     what a copy takes and skips (secrets included), and mirroring it
-    sync     connect, copy, push and status against the local copy
+    sync     connect, copy, push, status and check against the local copy
     views    list and diff, shown in a pager
 
 Modules refer to each other as `module.name`, never `from module import

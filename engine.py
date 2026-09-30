@@ -9,6 +9,7 @@ Run by the shell as an argv array, never through a shell:
     /usr/bin/python3 -I -S engine.py copy [--adopt] [--secrets] <repo-url> <vault> -- <path>...
     /usr/bin/python3 -I -S engine.py push <repo-url>
     /usr/bin/python3 -I -S engine.py status <repo-url>
+    /usr/bin/python3 -I -S engine.py check <repo-url>
     /usr/bin/python3 -I -S engine.py folder <repo-url>
     /usr/bin/python3 -I -S engine.py reset
     /usr/bin/python3 -I -S engine.py list [--secrets] <vault> -- <path>...   in a terminal
@@ -25,11 +26,12 @@ local copy of the repository's path, or exits 4 before the first connect.
 connect checks the repository can be used and clones or updates the local
 copy; copy (the first sync button) mirrors a vault's picked paths into it
 and stages them; push (the second) commits and pushes; status reports what
-waits to be pushed. --adopt lets this machine copy into a vault made on
+waits to be pushed; check reports, per vault of this machine, the files
+changed since its last copy (read-only, local). --adopt lets this machine copy into a vault made on
 another one; --secrets copies files that look like secrets too. See fv/ for
 each; fv/__init__.py lists the modules.
 
-connect, copy, push, status and reset print one JSON object per line, and
+connect, copy, push, status, check and reset print one JSON object per line, and
 nothing else on stdout:
 
     {"event": "step",      "text": "Copying changed files"}
@@ -41,6 +43,7 @@ nothing else on stdout:
     {"event": "pushed",    "vaults": [...], "commit": "abc1234"}
     {"event": "status",    "cloned": bool, "pending": {vault: n}, "unpushed": [vault, ...],
                            "pushedAt": {vault: seconds}}
+    {"event": "checked",   "stale": {vault: n}, "failed": {vault: reason}}
     {"event": "reset",     "removed": [path, ...]}
     {"event": "error",     "message": ...}
 """
@@ -142,12 +145,12 @@ def main(argv):
                 return reporting(sync.copy, url, vault, clean, "--adopt" in flags, "--secrets" in flags)
         sync.emit({"event": "error", "message": "Invalid repository, vault or path."})
         return 2
-    if command in ("push", "status") and len(args) == 1:
+    if command in ("push", "status", "check") and len(args) == 1:
         url = common.repo_url(args[0])
         if not url:
             sync.emit({"event": "error", "message": "Invalid repository."})
             return 2
-        return reporting(sync.push if command == "push" else sync.status, url)
+        return reporting({"push": sync.push, "status": sync.status, "check": sync.check}[command], url)
     if command == "diff" and len(args) == 2:
         url, vault = common.repo_url(args[0]), common.vault_name(args[1])
         if not url or not vault:

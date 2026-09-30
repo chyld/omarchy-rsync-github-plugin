@@ -22,7 +22,9 @@ import "Commands.js" as Commands
 //   Commands.js    every command the shell runs
 //   Safe.js        validation of everything that is not a literal
 //
-// Nothing touches the network except Connect and Push.
+// Nothing touches the network except Connect and Push. Every hour, and each
+// time the popup opens, a local check counts the files changed since each
+// vault's last copy; it only flags them, and never copies or pushes.
 Item {
   id: svc
 
@@ -142,6 +144,8 @@ Item {
       // to open with Edit.
       if (result.exists === false) svc.save()
       svc.refreshStatus()
+      // Picked paths may have changed (added here, or edited by hand).
+      svc.check()
     } else {
       svc.loaded = false
       svc.problems = []
@@ -402,6 +406,7 @@ Item {
         || Safe.plain(err, 200) || "It stopped unexpectedly."
       done(result, failure)
       svc.refreshStatus()
+      if (svc.checkAfterJob) { svc.checkAfterJob = false; svc.check() }
     }, null, function(line) {
       var e = Safe.engineEvent(line)
       if (!e) return
@@ -431,6 +436,9 @@ Item {
     svc.runJob("copy", name, argv, function(result, failure) {
       if (!result) { svc.errors = svc.setIn(svc.errors, name, failure); return }
       svc.skipped = svc.setIn(svc.skipped, name, { list: result.skipped, count: result.skippedCount })
+      // Copied: nothing changed since, and a check started before is stale.
+      svc.copies++
+      svc.stale = svc.setIn(svc.stale, name, undefined)
       var summary = Safe.summary(result)
       svc.setConfig(Safe.withVault(svc.config, name, function(x) {
         x.lastSummary = summary
@@ -479,6 +487,9 @@ Item {
       svc.unpushed = []
       svc.pushedAt = {}
       svc.cloned = false
+      svc.stale = {}
+      svc.checkFailed = {}
+      svc.checkedAt = 0
       svc.notice = "Deleted all local data. Paste a repository URL to start again."
       svc.load()
     })
@@ -532,7 +543,7 @@ Item {
     })
   }
 
-  onRepoUrlChanged: svc.refreshStatus()
+  onRepoUrlChanged: { svc.refreshStatus(); svc.check() }
 
   // Vaults of the connected repository waiting to be pushed.
   readonly property var waiting: {
@@ -541,6 +552,65 @@ Item {
     for (var i = 0; i < svc.unpushed.length; i++) if (list.indexOf(svc.unpushed[i]) === -1) list.push(svc.unpushed[i])
     return list
   }
+
+  // ------------------------------------------------------------ check
+
+  // Per vault of this machine: the files changed since its last copy, so
+  // Copy to repo is needed. Read by the engine's check (local, read-only)
+  // every hour and each time the popup opens (see Widget.qml), after a load,
+  // and after a job that had to wait. Vaults it couldn't check (over a
+  // limit, say) are in checkFailed, with why.
+  property var stale: ({})
+  property var checkFailed: ({})
+  property real checkedAt: 0
+  property bool checkAfterJob: false
+  // Counts successful copies, so a check that started before one is dropped.
+  property int copies: 0
+
+  // Asked for often (every load): the requests within a second become one.
+  function check() { checkSoon.restart() }
+
+  Timer {
+    id: checkSoon
+    interval: 1000
+    onTriggered: svc.runCheck()
+  }
+
+  Timer {
+    interval: 3600000
+    repeat: true
+    running: svc.loaded && svc.repoUrl !== ""
+    onTriggered: svc.check()
+  }
+
+  // Not while a job runs (the engine would wait for its lock, holding up the
+  // queue): it runs when the job ends.
+  function runCheck() {
+    if (!Commands.check(svc.engineScript, svc.repoUrl)) {
+      svc.stale = {}; svc.checkFailed = {}; svc.checkedAt = 0
+      return
+    }
+    if (svc.busy) { svc.checkAfterJob = true; return }
+    svc.enqueue("check", function(finish) {
+      if (svc.busy) { svc.checkAfterJob = true; return false }
+      var url = svc.repoUrl
+      var copies = svc.copies
+      return io.run(Commands.check(svc.engineScript, url), 300000, function(code, out) {
+        var lines = out.split("\n")
+        for (var i = lines.length - 1; i >= 0; i--) {
+          var e = Safe.engineEvent(lines[i])
+          if (!e || e.event !== "checked") continue
+          if (copies !== svc.copies) svc.check()
+          else if (url === svc.repoUrl) { svc.stale = e.stale; svc.checkFailed = e.failed; svc.checkedAt = Date.now() }
+          break
+        }
+        finish(code === 0)
+      })
+    })
+  }
+
+  // Vaults of the connected repository with files to copy.
+  readonly property var outdated: Object.keys(svc.stale)
 
   function openRepo() {
     var argv = Commands.openUrl(svc.omarchyRoot, svc.repoUrl)

@@ -40,8 +40,10 @@ Panel {
 
   onOpenedChanged: {
     if (!opened || !root.service) return
-    // Picks up a hand edit even if the file watch missed it.
+    // Picks up a hand edit even if the file watch missed it, and looks for
+    // files changed since each vault's last copy.
     root.service.load()
+    root.service.check()
     root.creating = false
     root.resetting = false
     urlField.text = root.service.repoUrl
@@ -93,6 +95,9 @@ Panel {
   readonly property bool chosenCopying: root.busy && root.service.job === "copy" && root.service.jobVault === root.chosen
   readonly property bool pushing: root.busy && root.service.job === "push"
   readonly property int waitingCount: root.service ? root.service.waiting.length : 0
+  // Vaults with files changed since their last copy, and the chosen one's count.
+  readonly property int outdatedCount: root.service ? root.service.outdated.length : 0
+  readonly property int chosenStale: root.service && root.chosen ? (root.service.stale[root.chosen] || 0) : 0
   property string createError: ""
 
   function vaultStatus(v) {
@@ -101,6 +106,8 @@ Panel {
     if (s.job === "copy" && s.jobVault === v.name) return { text: "copying\u2026", color: Color.accent }
     if (s.job === "push" && s.waiting.indexOf(v.name) !== -1) return { text: "pushing\u2026", color: Color.accent }
     if (s.errors[v.name]) return { text: "copy failed", color: Color.urgent }
+    var c = s.stale[v.name] || 0
+    if (c > 0) return { text: c + (c === 1 ? " file" : " files") + " to copy", color: Color.accent }
     var n = s.pending[v.name] || 0
     if (n > 0) return { text: n + (n === 1 ? " change" : " changes") + " to push", color: Color.accent }
     if (s.unpushed.indexOf(v.name) !== -1) return { text: "ready to push", color: Color.accent }
@@ -123,6 +130,8 @@ Panel {
     if (!s.repoUrl) return "Not connected"
     if (root.sortedVaults.length === 0) return "No vaults yet"
     for (var k in s.errors) return "Copy failed"
+    if (root.outdatedCount > 0) return root.outdatedCount + (root.outdatedCount === 1 ? " vault" : " vaults") + " to copy"
+    if (root.waitingCount > 0) return root.waitingCount + (root.waitingCount === 1 ? " vault" : " vaults") + " to push"
     return root.sortedVaults.length + (root.sortedVaults.length === 1 ? " vault" : " vaults")
   }
 
@@ -186,7 +195,7 @@ Panel {
     if (!s) return "idle"
     if (s.busy) return "busy"
     if (s.configError || s.pushError || Object.keys(s.errors).length > 0) return "error"
-    return root.waitingCount > 0 ? "waiting" : "idle"
+    return root.waitingCount > 0 || root.outdatedCount > 0 ? "waiting" : "idle"
   }
 
   // What the new vault will be called, or "".
@@ -803,7 +812,7 @@ Panel {
               iconSpinning: root.chosenCopying
               tooltipText: "Step 1: copy this vault's files into the local repository (nothing is sent)"
               bordered: true
-              selected: enabled && root.waitingCount === 0
+              selected: enabled && (root.chosenStale > 0 || root.waitingCount === 0)
               enabled: root.ready && !root.busy && root.chosenVault !== null && root.chosenVault.repoUrl !== ""
                 && root.chosenVault.sources.length > 0 && root.chosenOwned
               opacity: enabled || root.chosenCopying ? 1 : 0.5
@@ -868,6 +877,20 @@ Panel {
               if (pushed) parts.push("pushed " + Safe.shortTime(new Date(pushed), new Date()))
               return parts.join(" \u00b7 ")
             }
+          }
+
+          // The chosen vault couldn't be checked for changed files.
+          Warning {
+            readonly property string reason: root.service && root.chosen ? (root.service.checkFailed[root.chosen] || "") : ""
+            visible: reason !== "" && root.chosenOwned
+            text: "Couldn't check for changed files: " + reason
+          }
+
+          // When files were last checked; it happens every hour and when this opens.
+          Hint {
+            visible: root.chosenVault !== null && root.chosenOwned && root.service.checkedAt > 0
+            text: root.service && root.service.checkedAt > 0
+              ? "Checked for changed files at " + Safe.shortTime(new Date(root.service.checkedAt), new Date()) : ""
           }
 
           // The last copy skipped something: the list tool shows it all.

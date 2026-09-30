@@ -1,6 +1,7 @@
 """What a copy takes: every file and symlink under the picked paths, with
 what is skipped and why, then rsync copying exactly that list and anything
-else removed, so the vault folder stays an exact copy.
+else removed, so the vault folder stays an exact copy. compare counts what
+such a copy would change, without copying.
 
 While planning: a .git folder inside a picked folder is skipped (git would
 store only a pointer to that repository); symlinks inside a picked folder
@@ -10,6 +11,7 @@ FIFOs and devices are skipped and reported. So are files that look like
 secrets, unless the vault includes secrets: everything copied is pushed to
 GitHub as it is, unencrypted."""
 
+import filecmp
 import os
 import re
 import secrets
@@ -219,6 +221,75 @@ def rsync(paths, dest, extra, p):
     if code != 0:
         text = err.decode("utf-8", "replace").strip().splitlines()
         raise common.Failure("Copying failed: " + common.plain(text[0] if text else f"rsync exited {code}", 200))
+
+
+def compare(dest, p, keep=()):
+    """How many paths a mirror of plan `p` into `dest` would add, change or
+    remove, touching nothing: the check for files changed since the last
+    copy. Size and time first, as rsync does; a file whose time alone
+    differs is compared byte for byte, so a file only touched, or written
+    again as it was, doesn't count."""
+    if p.over:
+        raise common.Failure(p.over)
+    planned = set()
+    changed = 0
+    for path, _, link, followed in p.entries:
+        rel = path.lstrip("/")
+        planned.add(rel)
+        if differs(path, os.path.join(dest, rel), link, followed):
+            changed += 1
+    return changed + leftovers(dest, planned | set(keep))
+
+
+def differs(src, dst, link, followed):
+    """Whether the copy of `src` at `dst` would change. A symlink inside a
+    picked folder is compared as a link, anything under a picked symlink as
+    what it points at (see mirror)."""
+    try:
+        d = os.lstat(dst)
+    except FileNotFoundError:
+        return True
+    if link is not None and not followed:
+        try:
+            return not stat.S_ISLNK(d.st_mode) or os.readlink(dst) != link
+        except OSError:
+            return True
+    try:
+        s = os.stat(src)
+    except OSError:
+        return False               # gone since planning: a copy skips it too
+    if not stat.S_ISREG(s.st_mode):
+        return False
+    if not stat.S_ISREG(d.st_mode):
+        return True
+    # git keeps a file's execute bit, and nothing else of its mode.
+    if s.st_size != d.st_size or (s.st_mode ^ d.st_mode) & stat.S_IXUSR:
+        return True
+    if s.st_mtime_ns == d.st_mtime_ns:
+        return False
+    try:
+        return not filecmp.cmp(src, dst, shallow=False)
+    except OSError:
+        return True
+
+
+def leftovers(dest, keep):
+    """Files and links under `dest` that prune would remove."""
+    def walk(path, rel):
+        n = 0
+        try:
+            entries = list(os.scandir(path))
+        except (FileNotFoundError, NotADirectoryError):
+            return 0
+        for entry in entries:
+            child_rel = rel + "/" + entry.name if rel else entry.name
+            if entry.is_dir(follow_symlinks=False):
+                n += walk(entry.path, child_rel)
+            elif child_rel not in keep:
+                n += 1
+        return n
+
+    return walk(dest, "")
 
 
 def prune(dest, keep):

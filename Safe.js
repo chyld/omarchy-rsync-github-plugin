@@ -185,7 +185,7 @@ function addSources(existing, text) {
 
 // ------------------------------------------------------------ engine
 
-// One line of `engine.py` connect, copy, push or status output, checked, or null.
+// One line of `engine.py` connect, copy, push, status or check output, checked, or null.
 function engineEvent(line) {
   var e
   try { e = JSON.parse(line) } catch (err) { return null }
@@ -231,6 +231,14 @@ function engineEvent(line) {
   if (e.event === "status")
     return { event: "status", cloned: e.cloned === true, pending: counts(e.pending, 1e15),
              unpushed: vaultList(e.unpushed, MAX_VAULTS), pushedAt: counts(e.pushedAt, 4398046511) }
+  if (e.event === "checked") {
+    var failed = {}
+    var rawFailed = e.failed && typeof e.failed === "object" && !Array.isArray(e.failed) ? e.failed : {}
+    var names = Object.keys(rawFailed).slice(0, MAX_VAULTS)
+    for (var f = 0; f < names.length; f++)
+      if (vaultName(names[f]) && typeof rawFailed[names[f]] === "string") failed[names[f]] = plain(rawFailed[names[f]], 160)
+    return { event: "checked", stale: counts(e.stale, 1e15), failed: failed }
+  }
   if (e.event !== "copied") return null
   var skipped = []
   var rawSkipped = Array.isArray(e.skipped) ? e.skipped.slice(0, MAX_LISTED) : []
