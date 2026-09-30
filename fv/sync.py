@@ -317,12 +317,12 @@ def push(url):
 
 def status(url):
     """Per vault: changes copied but not committed, whether commits wait to
-    be pushed, and when it was last pushed. Local and read-only: it reads
+    be pushed, the files a push would change, and when it was last pushed. Local and read-only: it reads
     the index and history, and never stages anything. Only copy changes
     the work tree, and it stages what it changes."""
     repo = places.mirror_dir(url)
     if not os.path.isdir(os.path.join(repo, ".git")):
-        emit({"event": "status", "cloned": False, "pending": {}, "unpushed": [], "pushedAt": {}})
+        emit({"event": "status", "cloned": False, "pending": {}, "unpushed": [], "outgoing": {}, "pushedAt": {}})
         return
     git = proc.Git(repo)
     settle(git)
@@ -333,7 +333,19 @@ def status(url):
             pending[top] = pending.get(top, 0) + 1
     remote = f"refs/remotes/origin/{branch_of(git)}"
     emit({"event": "status", "cloned": True, "pending": pending, "unpushed": unpushed_vaults(git, remote),
-          "pushedAt": pushed_times(git, remote)})
+          "outgoing": outgoing(git, remote), "pushedAt": pushed_times(git, remote)})
+
+
+def outgoing(git, remote):
+    """{vault: n}: the files a push would change on GitHub's branch, as last
+    fetched, whether copied only or already committed. Reads the index."""
+    base = remote if git.maybe("rev-parse", "--verify", "-q", remote) else EMPTY_TREE
+    counts = {}
+    for path in git.ok("diff", "--cached", "--name-only", "-z", base).split("\0"):
+        top = path.split("/", 1)[0]
+        if path and common.vault_name(top):
+            counts[top] = counts.get(top, 0) + 1
+    return counts
 
 
 # ------------------------------------------------------------ check

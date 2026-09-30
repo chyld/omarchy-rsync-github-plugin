@@ -230,7 +230,8 @@ function engineEvent(line) {
   }
   if (e.event === "status")
     return { event: "status", cloned: e.cloned === true, pending: counts(e.pending, 1e15),
-             unpushed: vaultList(e.unpushed, MAX_VAULTS), pushedAt: counts(e.pushedAt, 4398046511) }
+             unpushed: vaultList(e.unpushed, MAX_VAULTS), outgoing: counts(e.outgoing, 1e15),
+             pushedAt: counts(e.pushedAt, 4398046511) }
   if (e.event === "checked") {
     var failed = {}
     var rawFailed = e.failed && typeof e.failed === "object" && !Array.isArray(e.failed) ? e.failed : {}

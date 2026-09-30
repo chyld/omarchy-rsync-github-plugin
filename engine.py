@@ -42,7 +42,7 @@ nothing else on stdout:
                            "skipped": ["/path: reason", ...], "skippedCount": n}
     {"event": "pushed",    "vaults": [...], "commit": "abc1234"}
     {"event": "status",    "cloned": bool, "pending": {vault: n}, "unpushed": [vault, ...],
-                           "pushedAt": {vault: seconds}}
+                           "outgoing": {vault: n}, "pushedAt": {vault: seconds}}
     {"event": "checked",   "stale": {vault: n}, "failed": {vault: reason}}
     {"event": "reset",     "removed": [path, ...]}
     {"event": "error",     "message": ...}

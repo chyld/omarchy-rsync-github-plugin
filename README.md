@@ -60,8 +60,8 @@ omarchy plugin add https://github.com/chyld/omarchy-rsync-github-plugin --enable
 Every hour, and each time you open the popup, File Vault checks each of
 this machine's vaults for files that changed since its last copy: new,
 edited or deleted files, and picked paths added or removed. It only
-flags them: a badge on the bar mark counts the vaults that need a copy
-or a push, the vault shows **N files to
+flags them: a badge on the bar mark counts the files to copy and
+to push (copied, or committed but not on GitHub yet), the vault shows **N files to
 copy**, and Copy to repo is highlighted. It never copies or pushes by
 itself. The check is local and read-only (no git, no network); a file only
 touched, or saved again unchanged, doesn't count. Copied changes not

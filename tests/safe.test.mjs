@@ -115,9 +115,9 @@ test("engineEvent checks each field", () => {
                                                                commit: "; rm" }))),
                    { event: "pushed", vaults: ["2026-10-01-a"], commit: "" })
   assert.deepEqual(plainJson(Safe.engineEvent(JSON.stringify({ event: "status", cloned: true,
-    pending: { "2026-10-01-a": 3, "bad": 2, "2026-10-01-b": -1 }, unpushed: ["2026-10-01-b"],
+    pending: { "2026-10-01-a": 3, "bad": 2, "2026-10-01-b": -1 }, unpushed: ["2026-10-01-b"], outgoing: { "2026-10-01-b": 4, "x": 1 },
     pushedAt: { "2026-10-01-a": 1790000000, "2026-10-01-b": "soon", "x": 5, "2026-10-01-c": 1e12 } }))),
-    { event: "status", cloned: true, pending: { "2026-10-01-a": 3 }, unpushed: ["2026-10-01-b"],
+    { event: "status", cloned: true, pending: { "2026-10-01-a": 3 }, unpushed: ["2026-10-01-b"], outgoing: { "2026-10-01-b": 4 },
       pushedAt: { "2026-10-01-a": 1790000000 } })
   assert.deepEqual(plainJson(Safe.engineEvent('{"event":"status","pushedAt":[1]}')).pushedAt, {})
   assert.deepEqual(plainJson(Safe.engineEvent(JSON.stringify({ event: "checked",

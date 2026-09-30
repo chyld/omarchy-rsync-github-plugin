@@ -130,8 +130,8 @@ Panel {
     if (!s.repoUrl) return "Not connected"
     if (root.sortedVaults.length === 0) return "No vaults yet"
     for (var k in s.errors) return "Copy failed"
-    if (root.outdatedCount > 0) return root.outdatedCount + (root.outdatedCount === 1 ? " vault" : " vaults") + " to copy"
-    if (root.waitingCount > 0) return root.waitingCount + (root.waitingCount === 1 ? " vault" : " vaults") + " to push"
+    if (s.filesToCopy > 0) return s.filesToCopy + (s.filesToCopy === 1 ? " file" : " files") + " to copy"
+    if (s.filesToPush > 0) return s.filesToPush + (s.filesToPush === 1 ? " file" : " files") + " to push"
     return root.sortedVaults.length + (root.sortedVaults.length === 1 ? " vault" : " vaults")
   }
 
@@ -219,15 +219,9 @@ Panel {
     onPressed: function(b) { root.toggle() }
   }
 
-  // How many vaults need a copy or a push, as a badge on the mark: the
+  // How many files need a copy or a push, as a badge on the mark: the
   // mark's own core is too small to notice on its own.
-  readonly property int attentionCount: {
-    var s = root.service
-    if (!s) return 0
-    var list = s.outdated.slice()
-    for (var i = 0; i < s.waiting.length; i++) if (list.indexOf(s.waiting[i]) === -1) list.push(s.waiting[i])
-    return list.length
-  }
+  readonly property int attentionCount: root.service ? root.service.filesToCopy + root.service.filesToPush : 0
 
   Rectangle {
     id: badge

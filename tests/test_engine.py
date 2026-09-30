@@ -459,13 +459,14 @@ class Sync(Home):
         self.assertEqual((copied["files"], copied["changed"]), (1, 2))   # the file and the definition
         self.assertEqual(self.remote_log(), [])            # nothing sent
         self.assertEqual(self.status()["pending"], {"2026-10-01-omarchy": 2})
+        self.assertEqual(self.status()["outgoing"], {"2026-10-01-omarchy": 2})
         pushed = self.push()
         self.assertEqual(pushed["vaults"], ["2026-10-01-omarchy"])
         self.assertEqual(self.remote_files(), [f"2026-10-01-omarchy/{rel}/.bashrc"])
         when = int(subprocess.run(["git", "-C", self.remote, "log", "-1", "--format=%ct", "main"],
                                   capture_output=True, text=True).stdout)
         self.assertEqual(self.status(), {"event": "status", "cloned": True, "pending": {}, "unpushed": [],
-                                         "pushedAt": {"2026-10-01-omarchy": when}})
+                                         "outgoing": {}, "pushedAt": {"2026-10-01-omarchy": when}})
 
     def test_push_commits_each_vault_separately(self):
         self.copy("2026-10-01-a", self.write("a.txt", "a"))
@@ -494,7 +495,7 @@ class Sync(Home):
 
     def test_status_before_the_first_clone(self):
         self.assertEqual(self.status(), {"event": "status", "cloned": False, "pending": {}, "unpushed": [],
-                                         "pushedAt": {}})
+                                         "outgoing": {}, "pushedAt": {}})
 
     def index(self):
         repo = places.mirror_dir(URL)
@@ -805,6 +806,18 @@ class Sync(Home):
         self.copy("2026-10-01-a", rc)
         self.assertNotIn("2026-10-01-a", self.check()["stale"])
         self.assertEqual(self.status()["pending"], {"2026-10-01-a": 2})   # the file and the definition
+
+    def test_outgoing_counts_files_copied_or_committed_but_not_pushed(self):
+        a, b = self.write("a.txt", "a"), self.write("b.txt", "b")
+        self.sync("2026-10-01-a", a, b)
+        self.write("a.txt", "a2")
+        self.write("b.txt", "b2")
+        self.copy("2026-10-01-a", a, b)
+        self.assertEqual(self.status()["outgoing"], {"2026-10-01-a": 2})
+        # Committed but not pushed (a push that failed after committing).
+        sync.commit_pending(proc.Git(places.mirror_dir(URL)))
+        done = self.status()
+        self.assertEqual((done["pending"], done["unpushed"], done["outgoing"]), ({}, ["2026-10-01-a"], {"2026-10-01-a": 2}))
 
     def test_check_counts_a_changed_pick_and_stays_read_only(self):
         me = config.this_machine()["id"]

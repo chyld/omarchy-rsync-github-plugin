@@ -485,6 +485,7 @@ Item {
       svc.skipped = {}
       svc.pending = {}
       svc.unpushed = []
+      svc.outgoing = {}
       svc.pushedAt = {}
       svc.cloned = false
       svc.stale = {}
@@ -502,6 +503,8 @@ Item {
   // pushed, and when each was last pushed (ms).
   property var pending: ({})
   property var unpushed: []
+  // Per vault, the files a push would change on GitHub, copied or committed.
+  property var outgoing: ({})
   property var pushedAt: ({})
   property bool cloned: false
 
@@ -519,7 +522,7 @@ Item {
   // queue): every job asks again when it ends.
   function readStatus() {
     if (!Commands.status(svc.engineScript, svc.repoUrl)) {
-      svc.pending = {}; svc.unpushed = []; svc.pushedAt = {}; svc.cloned = false
+      svc.pending = {}; svc.unpushed = []; svc.outgoing = {}; svc.pushedAt = {}; svc.cloned = false
       return
     }
     if (svc.busy) return
@@ -534,7 +537,8 @@ Item {
           if (url === svc.repoUrl) {
             var times = {}
             for (var k in e.pushedAt) times[k] = e.pushedAt[k] * 1000
-            svc.pending = e.pending; svc.unpushed = e.unpushed; svc.pushedAt = times; svc.cloned = e.cloned
+            svc.pending = e.pending; svc.unpushed = e.unpushed; svc.outgoing = e.outgoing; svc.pushedAt = times
+            svc.cloned = e.cloned
           }
           break
         }
@@ -611,6 +615,23 @@ Item {
 
   // Vaults of the connected repository with files to copy.
   readonly property var outdated: Object.keys(svc.stale)
+
+  // Files to copy, and files to push (copied, or committed and not pushed),
+  // over every vault of the connected repository. A file copied and then
+  // changed again counts in both.
+  function total(map) {
+    var n = 0
+    for (var k in map) n += map[k]
+    return n
+  }
+  readonly property int filesToCopy: svc.total(svc.stale)
+  // A vault waiting to be pushed counts at least one, whatever git reports.
+  readonly property int filesToPush: {
+    var n = 0
+    for (var i = 0; i < svc.waiting.length; i++) n += Math.max(1, svc.outgoing[svc.waiting[i]] || 0)
+    for (var k in svc.outgoing) if (svc.waiting.indexOf(k) === -1) n += svc.outgoing[k]
+    return n
+  }
 
   function openRepo() {
     var argv = Commands.openUrl(svc.omarchyRoot, svc.repoUrl)
