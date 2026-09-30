@@ -219,6 +219,41 @@ Panel {
     onPressed: function(b) { root.toggle() }
   }
 
+  // How many vaults need a copy or a push, as a badge on the mark: the
+  // mark's own core is too small to notice on its own.
+  readonly property int attentionCount: {
+    var s = root.service
+    if (!s) return 0
+    var list = s.outdated.slice()
+    for (var i = 0; i < s.waiting.length; i++) if (list.indexOf(s.waiting[i]) === -1) list.push(s.waiting[i])
+    return list.length
+  }
+
+  Rectangle {
+    id: badge
+    visible: root.attentionCount > 0 && !root.busy
+    anchors.top: button.top
+    anchors.right: button.right
+    z: 10
+    implicitWidth: Math.max(Style.space(14), badgeLabel.implicitWidth + Style.space(6))
+    implicitHeight: Style.space(14)
+    radius: height / 2
+    color: Color.accent
+    border.width: 1
+    border.color: root.bar ? root.bar.background : "transparent"
+
+    Text {
+      id: badgeLabel
+      anchors.centerIn: parent
+      textFormat: Text.PlainText
+      text: root.attentionCount > 9 ? "9+" : String(root.attentionCount)
+      color: root.bar ? root.bar.background : "black"
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption * 0.85
+      font.bold: true
+    }
+  }
+
   // ------------------------------------------------------------ popup parts
 
   // The connected repository as owner/repo, for the header pill.

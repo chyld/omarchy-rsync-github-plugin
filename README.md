@@ -60,7 +60,8 @@ omarchy plugin add https://github.com/chyld/omarchy-rsync-github-plugin --enable
 Every hour, and each time you open the popup, File Vault checks each of
 this machine's vaults for files that changed since its last copy: new,
 edited or deleted files, and picked paths added or removed. It only
-flags them: the bar mark's core lights up, the vault shows **N files to
+flags them: a badge on the bar mark counts the vaults that need a copy
+or a push, the vault shows **N files to
 copy**, and Copy to repo is highlighted. It never copies or pushes by
 itself. The check is local and read-only (no git, no network); a file only
 touched, or saved again unchanged, doesn't count. Copied changes not
@@ -173,7 +174,8 @@ credentials are pushed unencrypted.
 - `keepLoaded` is set so a plugin hot-reload (installing or editing any
   plugin) doesn't kill a copy or push part way. The catch: after changing
   or updating this plugin, run `omarchy restart shell` to load the new
-  `Service.qml`.
+  `Service.qml` (and `Widget.qml`: the bar keeps a widget whose file path
+  hasn't changed).
 - One File Vault command at a time touches the local repositories: the
   engine takes a lock (`~/.local/share/file-vault/lock`) for status, copy,
   push, connect, diff and reset, and clears a git `index.lock` left by a
